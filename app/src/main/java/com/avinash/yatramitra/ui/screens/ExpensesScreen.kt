@@ -299,6 +299,7 @@ private fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit)
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AddExpenseDialog(
     members: List<Member>,
