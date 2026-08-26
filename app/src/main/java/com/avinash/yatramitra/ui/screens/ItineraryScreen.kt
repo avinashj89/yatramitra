@@ -26,10 +26,12 @@ import java.util.UUID
 fun ItineraryScreen() {
     val context = LocalContext.current
     var days by remember { mutableStateOf<List<ItineraryDay>>(emptyList()) }
+    var tripName by remember { mutableStateOf("") }
     var loaded by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         days = LocalStore.loadItinerary(context)
+        tripName = LocalStore.loadRoutePlan(context).tripName
         loaded = true
     }
 
@@ -47,6 +49,13 @@ fun ItineraryScreen() {
     Column(modifier = Modifier.fillMaxSize()) {
         Column(Modifier.padding(20.dp, 20.dp, 20.dp, 8.dp)) {
             Text("Itinerary", style = MaterialTheme.typography.titleLarge)
+            if (tripName.isNotBlank()) {
+                Text(
+                    "Planning: $tripName",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             Text(
                 "Build your day-by-day plan: meetup points, meals, sightseeing stops — whatever you like.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -171,7 +180,23 @@ private fun DayCard(
                     Text(stop.fromTime, modifier = Modifier.weight(0.8f))
                     Text(stop.tillTime, modifier = Modifier.weight(0.8f))
                     Column(modifier = Modifier.weight(1.6f)) {
-                        Text(stop.place, fontWeight = FontWeight.Medium)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(stop.place, fontWeight = FontWeight.Medium)
+                            if (stop.isSuggested) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "Suggested",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .background(
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                            shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp)
+                                        )
+                                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
                         if (stop.notes.isNotBlank()) {
                             Text(
                                 stop.notes,
@@ -262,7 +287,8 @@ private fun StopEditDialog(
                             tillTime = tillTime,
                             place = place,
                             notes = notes,
-                            order = initial?.order ?: 0
+                            order = initial?.order ?: 0,
+                            isSuggested = initial?.isSuggested ?: false
                         )
                     )
                 },

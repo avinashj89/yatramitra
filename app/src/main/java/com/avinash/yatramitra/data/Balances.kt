@@ -13,12 +13,20 @@ object Balances {
     fun computeBalances(members: List<Member>, expenses: List<Expense>): List<Balance> {
         val net = members.associate { it.id to 0.0 }.toMutableMap()
         for (expense in expenses) {
-            val participants = expense.splitAmongMemberIds.ifEmpty { members.map { it.id } }
-            if (participants.isEmpty()) continue
-            val share = expense.amount / participants.size
             net[expense.paidByMemberId] = (net[expense.paidByMemberId] ?: 0.0) + expense.amount
-            participants.forEach { memberId ->
-                net[memberId] = (net[memberId] ?: 0.0) - share
+            if (expense.customSplitAmounts.isNotEmpty()) {
+                // Custom split: each member's exact share, as entered when the expense was added.
+                expense.customSplitAmounts.forEach { (memberId, share) ->
+                    net[memberId] = (net[memberId] ?: 0.0) - share
+                }
+            } else {
+                // Equal split among the chosen participants (or everyone, if none were specified).
+                val participants = expense.splitAmongMemberIds.ifEmpty { members.map { it.id } }
+                if (participants.isEmpty()) continue
+                val share = expense.amount / participants.size
+                participants.forEach { memberId ->
+                    net[memberId] = (net[memberId] ?: 0.0) - share
+                }
             }
         }
         return members.map { Balance(it.id, it.name, net[it.id] ?: 0.0) }

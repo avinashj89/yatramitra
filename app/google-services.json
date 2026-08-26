@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "832877889905",
-    "project_id": "yatramitra121189",
-    "storage_bucket": "yatramitra121189.firebasestorage.app"
+    "project_number": "000000000000",
+    "project_id": "REPLACE-WITH-YOUR-FIREBASE-PROJECT-ID",
+    "storage_bucket": "REPLACE-WITH-YOUR-FIREBASE-PROJECT-ID.appspot.com"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:832877889905:android:1822f65459eb1b98f50ed0",
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
         "android_client_info": {
           "package_name": "com.avinash.yatramitra"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyB4Bj3m7r7Ml8RMw2o1mctHjVhLPJ2yIF4"
+          "current_key": "REPLACE-WITH-YOUR-API-KEY"
         }
       ],
       "services": {

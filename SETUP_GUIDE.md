@@ -1,89 +1,81 @@
 # YatraMitra — Setup Guide (no coding required)
 
-Everything in this folder is a finished Android app. You don't need to write or
-understand any code — just follow these steps once, in order. Total cost: **₹0**.
-
-You'll need: a computer with a web browser (for the one-time setup) and your
-Android phone (to install the finished app at the end).
+You already have this app set up on GitHub and Firebase. This guide is now mostly
+about **updating** the app when Claude sends you new code — the from-scratch setup
+further down only matters again if you ever start over on a brand new GitHub repo.
 
 ---
 
-## Part 1 — Put the code on GitHub (so it can be built into an app)
+## Updating the app with new changes (this is what you'll use most)
 
-1. Go to **github.com** and click **Sign up** (free). Skip this if you already have an account.
-2. Once logged in, click the **+** icon (top right) → **New repository**.
-3. Name it `yatramitra` (or anything you like). Leave everything else as default. Click **Create repository**.
-4. On the new repo's page, click **uploading an existing file** (a blue link near the middle of the page).
-5. Open the `YatraMitra` folder you downloaded from Claude on your computer, select **all files and folders inside it**, and drag them into the browser window.
-   - Make sure you're uploading the *contents* of the YatraMitra folder (settings.gradle.kts, app, .github, etc.) — not the YatraMitra folder itself.
-6. Scroll down and click **Commit changes**. Your code is now on GitHub.
+Whenever Claude finishes a batch of changes, it will tell you one of two things:
 
----
+**A) "Replace this one file"** (small fixes, like a single bug)
 
-## Part 2 — Create your free Firebase project (this is what keeps everyone's expenses in sync)
+1. Go to your repo on GitHub and open the exact file path Claude names.
+2. Click the pencil (edit) icon.
+3. Either make the small edit Claude describes, or select all and paste in the full replacement content Claude gives you.
+4. Scroll down, click **Commit changes**. This alone triggers a new build.
 
-1. Go to **console.firebase.google.com** and sign in with any Google account.
-2. Click **Create a project**. Name it anything (e.g. "YatraMitra"). You can turn off Google Analytics when asked — not needed. Click **Create project**.
-3. Once it's ready, click the **Android icon** to add an Android app to the project.
-4. For "Android package name" enter exactly: `com.avinash.yatramitra`
-   (This must match exactly, or the app won't connect.)
-5. Skip the nickname and SHA-1 fields — leave them blank. Click **Register app**.
-6. Click **Download google-services.json**. Save it somewhere you can find it (e.g. Desktop).
-7. Click **Next** through the remaining screens, then **Continue to console** (you don't need to add the SDK code shown — that's already done for you).
+**B) "Bulk re-upload"** (bigger batches touching many files, like a round of UI changes)
 
-### Turn on the database
+1. Go to your repo → **Add file → Upload files**.
+2. Open the new YatraMitra folder Claude sent you, select everything inside it, and drag it into the browser window — same as your very first upload.
+3. **Before clicking Commit**, GitHub shows a list of every file about to be uploaded. Find `app/google-services.json` in that list and click the small ✕ to remove it from the upload. That file is your real Firebase config — you set it up once in Part 2 below, and you never want a new upload to overwrite it with Claude's placeholder.
+4. Click **Commit changes**.
 
-1. In the Firebase console, on the left menu, click **Build → Firestore Database**.
-2. Click **Create database**. Choose any nearby location. Start in **Production mode**. Click **Enable**.
-3. Once created, click the **Rules** tab at the top.
-4. Delete everything in the box, and paste in the contents of the `firestore.rules` file from your YatraMitra folder (open it in Notepad/TextEdit, copy everything, paste it in).
-5. Click **Publish**.
+Either way, that commit automatically starts a new build. Then:
 
-### Put your real Firebase file into the project
+5. Click the **Actions** tab and watch for the new run. Wait 3–5 minutes; a green ✅ means it worked, a red ✗ means something needs fixing (see Troubleshooting below — send Claude the `e: file` error line).
+6. Click into the finished run, scroll to **Artifacts**, and download **YatraMitra-debug-apk**. Unzip it to get `app-debug.apk`.
+7. Get that file onto your phone (or straight into BlueStacks/BlueStacks Air if you're testing on your computer) and install it, replacing the old version.
 
-1. Go back to your repository on GitHub.
-2. Open the `app` folder in your repo.
-3. Click on `google-services.json` (this is currently a placeholder), then click the **pencil/edit icon**.
-4. Delete all the placeholder text, then open the real `google-services.json` file you downloaded from Firebase (in Notepad/TextEdit), copy everything, and paste it in here instead.
-5. Scroll down and click **Commit changes**.
+You do **not** need to touch Firebase, GitHub repo settings, or `google-services.json` again for a routine update — that's all one-time setup, done below.
 
 ---
 
-## Part 3 — Let GitHub build your app (no software to install)
+## First-time setup (already done — reference only)
 
-1. On your repository page, click the **Actions** tab.
-2. You should see a workflow run already started (called "Build YatraMitra APK") — committing the file above automatically triggers it. If you don't see one, click **Build YatraMitra APK** on the left, then **Run workflow** → **Run workflow**.
-3. Wait 3–5 minutes. Refresh the page — a green checkmark ✅ means it worked. A red ✗ means something needs fixing (see Troubleshooting below).
-4. Click into the finished run, scroll to the bottom, and under **Artifacts** click **YatraMitra-debug-apk** to download it. It downloads as a `.zip` — open it to get `app-debug.apk`.
+Skip this whole section unless you're setting the app up again from a brand new, empty GitHub repo (e.g. on a different account).
 
----
+### Part 1 — Put the code on GitHub
 
-## Part 4 — Install it on your phone
+1. Go to **github.com** and click **Sign up** (free), if you don't have an account.
+2. Click the **+** icon (top right) → **New repository**. Name it anything. Click **Create repository**.
+3. On the new repo's page, click **uploading an existing file**.
+4. Select everything inside the YatraMitra folder and drag it in — the *contents* of the folder (settings.gradle.kts, app, .github, etc.), not the folder itself.
+5. Click **Commit changes**.
 
-1. Get `app-debug.apk` onto your Android phone (email it to yourself, use Google Drive, WhatsApp to yourself, or a USB cable — whatever's easiest).
-2. Tap the file on your phone to install it. Android will warn about "installing from unknown sources" — this is normal for any app not from the Play Store. Tap **Settings** on that warning, allow installs from that source (e.g. your Files app or Chrome), then go back and tap the file again to install.
-3. Open **YatraMitra** from your app drawer. Done!
+### Part 2 — Create your free Firebase project
+
+1. Go to **console.firebase.google.com**, sign in, click **Create a project**. Turn off Google Analytics when asked. Click **Create project**.
+2. Click the **Android icon** to add an Android app. For "Android package name" enter exactly: `com.avinash.yatramitra`
+3. Skip nickname/SHA-1. Click **Register app**, then **Download google-services.json**.
+4. Click through to **Continue to console**.
+5. Left menu → **Build → Firestore Database** → **Create database** → any nearby location → **Production mode** → **Enable**.
+6. Click the **Rules** tab, delete everything there, paste in the contents of `firestore.rules` from your YatraMitra folder, click **Publish**.
+7. Back in your GitHub repo, open `app/google-services.json`, click the pencil icon, delete the placeholder content, paste in your real downloaded file's content instead, and **Commit changes**.
+
+From here on, use the "Updating the app" section above for every future change.
 
 ---
 
 ## Using the app
 
-- **Planner tab**: enter From/To, whether it's a round trip, how often you want a break (by km or hours), and fastest vs alternate route. Tap the button to open Google Maps with turn-by-turn directions.
-- **Itinerary tab**: build a day-by-day plan — add a day, then add stops with a from/till time, place name, and a note (like "Breakfast" or "Lunch"). This is the table style from your reference screenshot.
-- **Expenses tab**: tap **Create a new trip** to get a short code (e.g. `7F3K9Q`). Share that code with your travel companions (there's a share button once you're in) — they each install the app the same way and enter that code plus their name to join. Everyone then sees the same live expense list and who-owes-whom, Splitwise-style.
+- **Planner tab**: trip name, From/To with place suggestions as you type, up to 4 stops with a "+" to add more, round trip checkbox, break preference (km/hours), fastest vs "Surprise me" route. Tap the button to open Google Maps with turn-by-turn directions, or "Suggest pitstops for Itinerary" to auto-fill Day 1 with real break-stop suggestions along your route.
+- **Itinerary tab**: your day-by-day plan — add a day, then add/edit/delete stops with a from/till time, place name, and a note. Rows added by the pitstop-finder are tagged "Suggested."
+- **Expenses tab**: tap **Create a new trip** to get a short code, or add people directly by name with the person-add icon (they don't need to install the app). Add expenses with an equal or custom split, and see live balances, settle-up suggestions, and a running total.
 
 ## Costs, honestly
 
 - **GitHub**: free for this use (public repos get unlimited free build minutes; private repos get 2,000 free minutes/month, and one build uses only a few minutes).
 - **Firebase**: free "Spark" plan covers 50,000 reads and 20,000 writes a day — a personal trip app won't come close to that.
-- You will never be asked for a credit card for either of these unless you deliberately upgrade a plan.
-
-## If you want changes later
-
-Come back to this Claude conversation (or start a new one and mention this project) and describe what you'd like changed in plain English — new fields, colors, features, anything. I'll update the code; you just repeat Part 1 (upload the changed files) and Part 3 (download the new APK) — Part 2 (Firebase) only needs doing once.
+- **OpenStreetMap/OSRM/Overpass** (place suggestions and pitstop-finder): free public services, no account needed.
+- You will never be asked for a credit card for any of these unless you deliberately upgrade a plan.
 
 ## Troubleshooting
 
-- **Red ✗ on the GitHub Action**: click into the run and open the "Build debug APK" step to see the error. The most common cause is `google-services.json` not being replaced correctly, or the package name not matching `com.avinash.yatramitra` exactly in Firebase. Paste the error into this Claude conversation and I'll fix it.
+- **Red ✗ on the GitHub Action**: click into the run and open the "Build debug APK" step, search the log for `e: file`, and send Claude those lines — that's the actual error, not the big stack trace above it.
 - **"App not installed" on your phone**: make sure you downloaded `app-debug.apk` itself (not the `.zip` it came in), and that your phone has a few hundred MB of free storage.
-- **Expenses don't sync between phones**: double-check both phones used the exact same trip code, and that you completed the Firebase steps in Part 2 (a placeholder `google-services.json` will make the app open fine but expenses won't save).
+- **Expenses don't sync between phones**: double-check both phones used the exact same trip code, and that your real `google-services.json` (not the placeholder) is committed in `app/`.
+- **Pitstop suggestions come back empty**: the free map services occasionally have no data for very remote areas, or a typed place couldn't be found — try a slightly more specific place name, or check your internet connection.

@@ -5,10 +5,14 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -18,7 +22,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.text.KeyboardOptions
 import com.avinash.yatramitra.data.Balances
 import com.avinash.yatramitra.data.LocalStore
 import com.avinash.yatramitra.data.TripRepository
@@ -27,6 +30,8 @@ import com.avinash.yatramitra.model.Member
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
 import java.util.Locale
+
+private const val MAX_MEMBERS = 50
 
 @Composable
 fun ExpensesRoute() {
@@ -95,7 +100,8 @@ private fun JoinTripScreen(onJoined: (String, String, String) -> Unit) {
                 loading = true
                 scope.launch {
                     try {
-                        val newCode = TripRepository.createTrip()
+                        val plannerTripName = LocalStore.loadRoutePlan(context).tripName
+                        val newCode = TripRepository.createTrip(groupName = plannerTripName)
                         val memberId = TripRepository.joinTrip(newCode, name.ifBlank { "Traveler" })
                         onJoined(newCode, memberId, name.ifBlank { "Traveler" })
                     } catch (e: Exception) {
@@ -158,16 +164,22 @@ private fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit)
     val scope = rememberCoroutineScope()
     var members by remember { mutableStateOf<List<Member>>(emptyList()) }
     var expenses by remember { mutableStateOf<List<Expense>>(emptyList()) }
+    var groupName by remember { mutableStateOf("") }
     var showAddExpense by remember { mutableStateOf(false) }
+    var showAddPeople by remember { mutableStateOf(false) }
+    var editingGroupName by remember { mutableStateOf(false) }
+    var groupNameDraft by remember { mutableStateOf("") }
     val currency = remember { NumberFormat.getCurrencyInstance(Locale("en", "IN")) }
 
     LaunchedEffect(session.tripCode) {
         launch { TripRepository.observeMembers(session.tripCode).collect { members = it } }
         launch { TripRepository.observeExpenses(session.tripCode).collect { expenses = it } }
+        launch { TripRepository.observeTripMeta(session.tripCode).collect { groupName = it.groupName } }
     }
 
     val balances = remember(members, expenses) { Balances.computeBalances(members, expenses) }
     val settlements = remember(balances) { Balances.computeSettlements(balances) }
+    val totalExpense = remember(expenses) { expenses.sumOf { it.amount } }
 
     Scaffold(
         floatingActionButton = {
@@ -189,15 +201,51 @@ private fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit)
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Column {
-                                Text("Trip code", style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    session.tripCode,
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.Bold
-                                )
+                            if (editingGroupName) {
+                                Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                                    OutlinedTextField(
+                                        value = groupNameDraft,
+                                        onValueChange = { groupNameDraft = it },
+                                        singleLine = true,
+                                        label = { Text("Group name") },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(onClick = {
+                                        scope.launch {
+                                            TripRepository.updateGroupName(session.tripCode, groupNameDraft)
+                                            editingGroupName = false
+                                        }
+                                    }) { Icon(Icons.Filled.Check, contentDescription = "Save group name") }
+                                }
+                            } else {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        groupName.ifBlank { "Our trip" },
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            groupNameDraft = groupName
+                                            editingGroupName = true
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Edit,
+                                            contentDescription = "Edit group name",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
                             }
                             Row {
+                                IconButton(
+                                    onClick = { showAddPeople = true },
+                                    enabled = members.size < MAX_MEMBERS
+                                ) {
+                                    Icon(Icons.Filled.PersonAdd, contentDescription = "Add people")
+                                }
                                 IconButton(onClick = {
                                     val send = Intent(Intent.ACTION_SEND).apply {
                                         type = "text/plain"
@@ -213,10 +261,28 @@ private fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit)
                                 }
                             }
                         }
+                        Text("Trip code: ${session.tripCode}", style = MaterialTheme.typography.bodyMedium)
                         Text(
                             "${members.size} traveler${if (members.size == 1) "" else "s"}: " +
                                 members.joinToString(", ") { it.name },
                             style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+
+            item {
+                Card {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Total trip expense", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            currency.format(totalExpense),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -270,8 +336,13 @@ private fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit)
                     ) {
                         Column {
                             Text(expense.description, fontWeight = FontWeight.Medium)
+                            val splitLabel = if (expense.customSplitAmounts.isNotEmpty()) {
+                                "Paid by ${expense.paidByName} · custom split, ${expense.customSplitAmounts.size} ways"
+                            } else {
+                                "Paid by ${expense.paidByName} · split ${expense.splitAmongMemberIds.size} ways"
+                            }
                             Text(
-                                "Paid by ${expense.paidByName} · split ${expense.splitAmongMemberIds.size} ways",
+                                splitLabel,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                             )
@@ -281,6 +352,16 @@ private fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit)
                 }
             }
         }
+    }
+
+    if (showAddPeople) {
+        AddPeopleDialog(
+            currentMemberCount = members.size,
+            onAddName = { name ->
+                scope.launch { TripRepository.joinTrip(session.tripCode, name) }
+            },
+            onDismiss = { showAddPeople = false }
+        )
     }
 
     if (showAddExpense) {
@@ -299,6 +380,56 @@ private fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit)
     }
 }
 
+@Composable
+private fun AddPeopleDialog(
+    currentMemberCount: Int,
+    onAddName: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var addedCount by remember { mutableStateOf(0) }
+    val remaining = MAX_MEMBERS - currentMemberCount - addedCount
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add people") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Add travel companions by name — they don't need to install the app themselves. " +
+                        "Up to $MAX_MEMBERS people per trip.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    if (remaining > 0) "$remaining more can be added" else "Trip is at the $MAX_MEMBERS person limit",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (name.isNotBlank() && remaining > 0) {
+                        onAddName(name.trim())
+                        addedCount++
+                        name = ""
+                    }
+                },
+                enabled = name.isNotBlank() && remaining > 0
+            ) { Text("Add") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Done") } }
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AddExpenseDialog(
@@ -312,7 +443,39 @@ private fun AddExpenseDialog(
     var amount by remember { mutableStateOf("") }
     var paidBy by remember { mutableStateOf(currentMemberId) }
     var paidByExpanded by remember { mutableStateOf(false) }
+    var splitEqually by remember { mutableStateOf(true) }
     val splitAmong = remember { mutableStateListOf(*members.map { it.id }.toTypedArray()) }
+    val customAmounts = remember { mutableStateMapOf<String, String>() }
+
+    val amountValue = amount.toDoubleOrNull() ?: 0.0
+
+    // When switching into custom-split mode, seed each checked member with an equal starting share.
+    LaunchedEffect(splitEqually) {
+        if (!splitEqually) {
+            val share = if (splitAmong.isNotEmpty()) amountValue / splitAmong.size else 0.0
+            splitAmong.forEach { id ->
+                if (customAmounts[id] == null) customAmounts[id] = "%.2f".format(share)
+            }
+        }
+    }
+
+    // Keep customAmounts in sync when checkboxes change while in custom mode.
+    fun onMemberCheckedChange(memberId: String, checked: Boolean) {
+        if (checked) {
+            splitAmong.add(memberId)
+            if (!splitEqually && customAmounts[memberId] == null) customAmounts[memberId] = "0.00"
+        } else {
+            splitAmong.remove(memberId)
+            customAmounts.remove(memberId)
+        }
+    }
+
+    val allocatedTotal = customAmounts.filterKeys { splitAmong.contains(it) }
+        .values.sumOf { it.toDoubleOrNull() ?: 0.0 }
+    val customValid = splitEqually || (
+        kotlin.math.abs(allocatedTotal - amountValue) < 0.01 &&
+            splitAmong.all { (customAmounts[it]?.toDoubleOrNull() ?: -1.0) >= 0.0 }
+        )
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -361,31 +524,63 @@ private fun AddExpenseDialog(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(
                             checked = splitAmong.contains(m.id),
-                            onCheckedChange = { checked ->
-                                if (checked) splitAmong.add(m.id) else splitAmong.remove(m.id)
-                            }
+                            onCheckedChange = { checked -> onMemberCheckedChange(m.id, checked) }
                         )
-                        Text(m.name)
+                        Text(m.name, modifier = Modifier.weight(1f))
+                        if (!splitEqually && splitAmong.contains(m.id)) {
+                            OutlinedTextField(
+                                value = customAmounts[m.id] ?: "",
+                                onValueChange = { new -> if (new.all { it.isDigit() || it == '.' }) customAmounts[m.id] = new },
+                                label = { Text("₹") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                singleLine = true,
+                                modifier = Modifier.width(100.dp)
+                            )
+                        }
                     }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Split equally", fontWeight = FontWeight.Medium)
+                    Switch(checked = splitEqually, onCheckedChange = { splitEqually = it })
+                }
+
+                if (!splitEqually) {
+                    val diff = amountValue - allocatedTotal
+                    val message = when {
+                        kotlin.math.abs(diff) < 0.01 -> "Allocated: ₹%.2f of ₹%.2f — matches exactly".format(allocatedTotal, amountValue)
+                        diff > 0 -> "₹%.2f left to allocate".format(diff)
+                        else -> "Over by ₹%.2f — reduce someone's share".format(-diff)
+                    }
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (customValid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                    )
                 }
             }
         },
         confirmButton = {
             TextButton(
                 onClick = {
-                    val amt = amount.toDoubleOrNull() ?: 0.0
                     val payerName = members.find { it.id == paidBy }?.name ?: currentMemberName
                     onSave(
                         Expense(
                             description = description.ifBlank { "Expense" },
-                            amount = amt,
+                            amount = amountValue,
                             paidByMemberId = paidBy,
                             paidByName = payerName,
-                            splitAmongMemberIds = splitAmong.toList()
+                            splitAmongMemberIds = splitAmong.toList(),
+                            customSplitAmounts = if (splitEqually) emptyMap() else
+                                splitAmong.associateWith { customAmounts[it]?.toDoubleOrNull() ?: 0.0 }
                         )
                     )
                 },
-                enabled = description.isNotBlank() && (amount.toDoubleOrNull() ?: 0.0) > 0 && splitAmong.isNotEmpty()
+                enabled = description.isNotBlank() && amountValue > 0 && splitAmong.isNotEmpty() && customValid
             ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
