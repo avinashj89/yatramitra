@@ -62,9 +62,13 @@ From here on, use the "Updating the app" section above for every future change.
 
 ## Using the app
 
-- **Planner tab**: trip name, From/To with place suggestions as you type, up to 4 stops with a "+" to add more, round trip checkbox, break preference (km/hours), fastest vs "Surprise me" route. Tap the button to open Google Maps with turn-by-turn directions, or "Suggest pitstops for Itinerary" to auto-fill Day 1 with real break-stop suggestions along your route.
-- **Itinerary tab**: your day-by-day plan — add a day, then add/edit/delete stops with a from/till time, place name, and a note. Rows added by the pitstop-finder are tagged "Suggested."
-- **Expenses tab**: tap **Create a new trip** to get a short code, or add people directly by name with the person-add icon (they don't need to install the app). Add expenses with an equal or custom split, and see live balances, settle-up suggestions, and a running total.
+Opening the app now always starts with **Create a new trip** (you become its *Organizer*) or **enter a trip code** you were given (you join as a *Joiner*) — every tab lives inside that one shared trip and stays live-synced to everyone else in it. A shared bar above the tabs always shows your role, an Invite action (shares the trip code), and a live-sync indicator.
+
+- **Route & Stops tab** (Organizer): trip name, From/To with place suggestions as you type, up to 4 stops with a "+" to add more, round trip checkbox, and a Smart Pitstop Engine (break-frequency presets, preference chips, and "Generate pitstops for Itinerary" to auto-fill Day 1 with real break-stop suggestions along your route). Also lists trip members and lets you add people directly by name (they don't need to install the app). Tap "Open in Google Maps" for turn-by-turn directions.
+- **Route & Stops tab** (Joiner): a read-only summary of the Organizer's route, plus a box to send them a suggested change.
+- **Itinerary tab**: day-by-day plan, one day at a time via the chips at the top. Rows generated from the Route tab (start point, pitstops, destination) are locked — only their time and notes can be edited — while rows you add yourself are fully editable. Organizer-only editing; Joiners see it read-only and can submit suggestions. "Save & notify group" shares a summary of the day to WhatsApp.
+- **Expenses tab**: add expenses split equally, by percentage, or by exact amount; see your real share and whether you're owed or owe money, plus settle-up suggestions. Add your UPI ID (optional) so others can pay you directly with a "Pay via UPI" button.
+- Joiners can suggest changes to the route or itinerary from within those tabs; the Organizer sees them and can Accept or Dismiss.
 
 ## Costs, honestly
 
@@ -76,6 +80,6 @@ From here on, use the "Updating the app" section above for every future change.
 ## Troubleshooting
 
 - **Red ✗ on the GitHub Action**: click into the run and open the "Build debug APK" step, search the log for `e: file`, and send Claude those lines — that's the actual error, not the big stack trace above it.
-- **"App not installed" on your phone**: make sure you downloaded `app-debug.apk` itself (not the `.zip` it came in), and that your phone has a few hundred MB of free storage.
+- **"App not installed" on your phone**: first, make sure you downloaded `app-debug.apk` itself (not the `.zip` it came in) and that your phone has a few hundred MB of free storage. If those are fine, it's almost always a signing-key mismatch with whatever version is already on your phone — **uninstall YatraMitra from the phone first, then install the new APK.** The workflow caches one debug signing key across builds specifically to prevent this, but the very first build after that caching was added (or after a "Clear cache" done manually on GitHub) will still differ from whatever you already have installed.
 - **Expenses don't sync between phones**: double-check both phones used the exact same trip code, and that your real `google-services.json` (not the placeholder) is committed in `app/`.
 - **Pitstop suggestions come back empty**: the free map services occasionally have no data for very remote areas, or a typed place couldn't be found — try a slightly more specific place name, or check your internet connection.
