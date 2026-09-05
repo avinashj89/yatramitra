@@ -48,7 +48,15 @@ object Balances {
             val (debtorId, debtAmt) = debtors[di]
             val amount = min(creditAmt, debtAmt)
             if (amount > 0.01) {
-                result.add(Settlement(names[debtorId] ?: "", names[creditorId] ?: "", amount))
+                result.add(
+                    Settlement(
+                        fromMemberId = debtorId,
+                        fromName = names[debtorId] ?: "",
+                        toMemberId = creditorId,
+                        toName = names[creditorId] ?: "",
+                        amount = amount
+                    )
+                )
             }
             creditors[ci] = creditorId to (creditAmt - amount)
             debtors[di] = debtorId to (debtAmt - amount)

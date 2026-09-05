@@ -98,6 +98,17 @@ object RouteRepository {
         return samples.filter { (_, km) -> km < totalKm - 2.0 }
     }
 
+    /** Geocodes an ordered list of typed place names and fetches the driving route through them.
+     *  Null if fewer than 2 valid names, any place can't be found, or the route lookup fails. */
+    suspend fun fetchRouteSummary(orderedPlaceNames: List<String>): RouteInfo? {
+        val validNames = orderedPlaceNames.map { it.trim() }.filter { it.isNotBlank() }
+        if (validNames.size < 2) return null
+        val geocoded = validNames.map { PlacesRepository.geocode(it) }
+        if (geocoded.any { it == null }) return null
+        val points = geocoded.map { RoutePoint(it!!.lat, it.lon) }
+        return fetchRoute(points)
+    }
+
     /**
      * End-to-end pitstop suggestion: geocode the named stops, fetch the route, sample points
      * according to the break preference, and look up a real nearby place name for each sample.
@@ -109,14 +120,7 @@ object RouteRepository {
         breakEveryKm: Double? ,
         breakEveryHours: Double?
     ): List<Pitstop> {
-        val validNames = orderedPlaceNames.map { it.trim() }.filter { it.isNotBlank() }
-        if (validNames.size < 2) return emptyList()
-
-        val geocoded = validNames.map { PlacesRepository.geocode(it) }
-        if (geocoded.any { it == null }) return emptyList() // couldn't locate one of the typed places
-        val points = geocoded.map { RoutePoint(it!!.lat, it.lon) }
-
-        val route = fetchRoute(points) ?: return emptyList()
+        val route = fetchRouteSummary(orderedPlaceNames) ?: return emptyList()
         val totalKm = route.distanceMeters / 1000.0
         val totalHours = route.durationSeconds / 3600.0
         val avgSpeedKmh = if (totalHours > 0) totalKm / totalHours else 0.0

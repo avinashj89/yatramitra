@@ -4,7 +4,14 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Map-pin mark, scaled/centered from the exported logo SVG to fit the adaptive-icon safe zone. -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M54,24c-11.6,0 -21,9.4 -21,21c0,15.75 21,39 21,39s21,-23.25 21,-39C75,33.4 65.6,24 54,24zM54,52.5c-4.14,0 -7.5,-3.36 -7.5,-7.5s3.36,-7.5 7.5,-7.5s7.5,3.36 7.5,7.5S58.14,52.5 54,52.5z" />
+        android:pathData="M54,36 C44.1,36 36,44.1 36,54 C36,64.8 54,79.2 54,79.2 C54,79.2 72,64.8 72,54 C72,44.1 63.9,36 54,36 Z" />
+    <path
+        android:fillColor="#FF6B35"
+        android:pathData="M46.8,52.2 A7.2,7.2 0 1,0 61.2,52.2 A7.2,7.2 0 1,0 46.8,52.2 Z" />
+    <path
+        android:fillColor="#FFE4D6"
+        android:pathData="M54,28.8 L57.6,36 L54,34.2 L50.4,36 Z" />
 </vector>

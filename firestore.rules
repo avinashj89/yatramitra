@@ -2,17 +2,36 @@ rules_version = '2';
 
 // Paste this into Firebase Console -> Firestore Database -> Rules.
 // It allows anyone signed in anonymously by the YatraMitra app (which happens automatically)
-// to read/write trip data, while blocking access to anyone not using the app at all.
+// to read/write trip data *once they already know the trip code* — the code is what's supposed
+// to gate access, the same way a shared link would. "get" (fetch one specific trip you already
+// have the code for) is allowed, but "list" (browse every trip that exists) is explicitly denied,
+// so nobody can dump every trip in the database without ever knowing a code. Subcollection queries
+// for members/expenses are always scoped to one already-known tripCode by the request path itself,
+// so they stay listable without reopening that hole.
 service cloud.firestore {
   match /databases/{database}/documents {
     match /trips/{tripCode} {
-      allow read, write: if request.auth != null;
+      allow get: if request.auth != null;
+      allow list: if false;
+      allow write: if request.auth != null;
 
       match /members/{memberId} {
         allow read, write: if request.auth != null;
       }
 
       match /expenses/{expenseId} {
+        allow read, write: if request.auth != null;
+      }
+
+      match /itineraryDays/{dayId} {
+        allow read, write: if request.auth != null;
+      }
+
+      match /routeSuggestions/{suggestionId} {
+        allow read, write: if request.auth != null;
+      }
+
+      match /itinerarySuggestions/{suggestionId} {
         allow read, write: if request.auth != null;
       }
     }

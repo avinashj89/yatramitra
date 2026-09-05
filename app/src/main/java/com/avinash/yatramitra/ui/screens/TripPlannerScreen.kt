@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -12,54 +13,122 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.Landscape
+import androidx.compose.material.icons.filled.LocalGasStation
+import androidx.compose.material.icons.filled.LocationCity
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.QuestionAnswer
+import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.avinash.yatramitra.data.LocalStore
 import com.avinash.yatramitra.data.PlacesRepository
 import com.avinash.yatramitra.data.RouteRepository
+import com.avinash.yatramitra.data.TripRepository
 import com.avinash.yatramitra.model.BreakUnit
-import com.avinash.yatramitra.model.ItineraryDay
-import com.avinash.yatramitra.model.ItineraryStop
+import com.avinash.yatramitra.model.Member
+import com.avinash.yatramitra.model.MemberRole
 import com.avinash.yatramitra.model.PlaceSuggestion
 import com.avinash.yatramitra.model.RoutePlan
 import com.avinash.yatramitra.model.RoutePreference
+import com.avinash.yatramitra.model.RouteSuggestion
+import com.avinash.yatramitra.model.SuggestionStatus
+import com.avinash.yatramitra.ui.components.InitialsAvatar
+import com.avinash.yatramitra.ui.theme.Spacing
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
-import java.util.UUID
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TripPlannerScreen() {
+fun TripPlannerScreen(
+    session: LocalStore.Session,
+    members: List<Member>,
+    currentRole: MemberRole
+) {
     val context = LocalContext.current
-    var plan by remember { mutableStateOf(RoutePlan()) }
-    var loaded by remember { mutableStateOf(false) }
-    var findingPitstops by remember { mutableStateOf(false) }
-    var pitstopMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
-        plan = LocalStore.loadRoutePlan(context)
-        loaded = true
+    var plan by remember { mutableStateOf(RoutePlan()) }
+    var loaded by remember { mutableStateOf(false) }
+    var saveJob by remember { mutableStateOf<Job?>(null) }
+
+    var routeInfo by remember { mutableStateOf<RouteRepository.RouteInfo?>(null) }
+    var routeLoading by remember { mutableStateOf(false) }
+
+    var findingPitstops by remember { mutableStateOf(false) }
+    var pitstopMessage by remember { mutableStateOf<String?>(null) }
+    var computedPitstops by remember { mutableStateOf<List<RouteRepository.Pitstop>>(emptyList()) }
+
+    var selectedPreferences by remember {
+        mutableStateOf(setOf("Temples & Spiritual", "Dhabas & Highway Food", "Heritage & Forts"))
+    }
+
+    var suggestions by remember { mutableStateOf<List<RouteSuggestion>>(emptyList()) }
+    var suggestionText by remember { mutableStateOf("") }
+
+    LaunchedEffect(session.tripCode) {
+        launch {
+            TripRepository.observeRoutePlan(session.tripCode).collect { remote ->
+                plan = remote
+                loaded = true
+            }
+        }
+        launch {
+            TripRepository.observeRouteSuggestions(session.tripCode).collect { suggestions = it }
+        }
     }
 
     fun updatePlan(new: RoutePlan) {
         plan = new
-        LocalStore.saveRoutePlan(context, new)
+        saveJob?.cancel()
+        saveJob = scope.launch {
+            delay(400) // debounce: avoid a Firestore write on every keystroke
+            TripRepository.updateRoutePlan(session.tripCode, new)
+        }
+    }
+
+    LaunchedEffect(plan.from, plan.toStops) {
+        val names = listOf(plan.from) + plan.toStops
+        val validCount = names.count { it.trim().isNotBlank() }
+        if (validCount < 2) {
+            routeInfo = null
+        } else {
+            delay(500) // debounce: wait for a pause before hitting the free geocode/route APIs
+            routeLoading = true
+            routeInfo = RouteRepository.fetchRouteSummary(names)
+            routeLoading = false
+        }
     }
 
     if (!loaded) return
+
+    val isOrganizer = currentRole == MemberRole.ORGANIZER
+    val currentMemberName = members.find { it.id == session.memberId }?.name ?: session.memberName
+    val hasRoute = plan.from.isNotBlank() && plan.toStops.any { it.isNotBlank() }
 
     Column(
         modifier = Modifier
@@ -68,16 +137,130 @@ fun TripPlannerScreen() {
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-        Text("Plan your route", style = MaterialTheme.typography.titleLarge)
-        Text(
-            "Enter where you're starting and where you're headed. YatraMitra opens Google Maps for turn-by-turn navigation.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+        RouteScreenHeader(isOrganizer = isOrganizer, tripName = plan.tripName, travelerCount = members.size)
+
+        if (isOrganizer) {
+            OrganizerRouteForm(plan = plan, onPlanChange = ::updatePlan)
+
+            HorizontalDivider()
+
+            PitstopEngineCard(
+                plan = plan,
+                onPlanChange = ::updatePlan,
+                selectedPreferences = selectedPreferences,
+                onTogglePreference = { pref ->
+                    selectedPreferences = if (pref in selectedPreferences) {
+                        selectedPreferences - pref
+                    } else {
+                        selectedPreferences + pref
+                    }
+                },
+                computedPitstops = computedPitstops,
+                findingPitstops = findingPitstops,
+                enabled = hasRoute && plan.breakEvery.toDoubleOrNull() != null,
+                onGeneratePitstops = {
+                    findingPitstops = true
+                    pitstopMessage = null
+                    scope.launch {
+                        val orderedNames = listOf(plan.from) + plan.toStops
+                        val breakValue = plan.breakEvery.toDoubleOrNull()
+                        val pitstops = RouteRepository.suggestPitstops(
+                            orderedPlaceNames = orderedNames,
+                            breakEveryKm = if (plan.breakUnit == BreakUnit.KM) breakValue else null,
+                            breakEveryHours = if (plan.breakUnit == BreakUnit.HOURS) breakValue else null
+                        )
+                        findingPitstops = false
+                        computedPitstops = pitstops
+                        pitstopMessage = if (pitstops.isEmpty()) {
+                            "Couldn't find pitstops right now — check your internet connection, your places, and that a break amount is set."
+                        } else {
+                            TripRepository.regenerateDay1FromRoute(session.tripCode, plan, pitstops)
+                            "Added ${pitstops.size} suggested stop${if (pitstops.size == 1) "" else "s"} to Day 1 of your Itinerary — edit them there any time."
+                        }
+                    }
+                },
+                pitstopMessage = pitstopMessage
+            )
+        } else {
+            ReadOnlyRouteCard(plan = plan)
+        }
+
+        HorizontalDivider()
+
+        RouteSummaryCard(
+            loading = routeLoading,
+            routeInfo = routeInfo,
+            hasRoute = hasRoute,
+            onOpenMaps = { openInGoogleMaps(context, plan) }
         )
 
+        if (isOrganizer) {
+            HorizontalDivider()
+            TripMembersCard(
+                session = session,
+                members = members,
+                scope = scope
+            )
+        }
+
+        HorizontalDivider()
+
+        RouteSuggestionsCard(
+            isOrganizer = isOrganizer,
+            suggestions = suggestions,
+            currentMemberId = session.memberId,
+            suggestionText = suggestionText,
+            onSuggestionTextChange = { suggestionText = it },
+            onSubmit = {
+                val text = suggestionText.trim()
+                if (text.isNotBlank()) {
+                    scope.launch {
+                        TripRepository.addRouteSuggestion(session.tripCode, session.memberId, currentMemberName, text)
+                        suggestionText = ""
+                    }
+                }
+            },
+            onAccept = { id ->
+                scope.launch { TripRepository.updateRouteSuggestionStatus(session.tripCode, id, SuggestionStatus.ACCEPTED) }
+            },
+            onDismiss = { id ->
+                scope.launch { TripRepository.updateRouteSuggestionStatus(session.tripCode, id, SuggestionStatus.DISMISSED) }
+            }
+        )
+
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun RouteScreenHeader(isOrganizer: Boolean, tripName: String, travelerCount: Int) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AssistChip(
+                onClick = {},
+                enabled = false,
+                label = { Text(if (isOrganizer) "Organizer Mode" else "Joiner Mode") }
+            )
+            AssistChip(onClick = {}, enabled = false, label = { Text("Auto-saved") })
+        }
+        Text(
+            tripName.ifBlank { "Plan your route" },
+            style = MaterialTheme.typography.headlineMedium
+        )
+        Text(
+            "$travelerCount traveler${if (travelerCount == 1) "" else "s"} on this trip",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun OrganizerRouteForm(plan: RoutePlan, onPlanChange: (RoutePlan) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         OutlinedTextField(
             value = plan.tripName,
-            onValueChange = { updatePlan(plan.copy(tripName = it)) },
+            onValueChange = { onPlanChange(plan.copy(tripName = it)) },
             label = { Text("Trip name") },
             placeholder = { Text("e.g. Coorg long weekend") },
             singleLine = true,
@@ -87,7 +270,7 @@ fun TripPlannerScreen() {
         AutocompletePlaceField(
             label = "From",
             value = plan.from,
-            onValueChange = { updatePlan(plan.copy(from = it)) }
+            onValueChange = { onPlanChange(plan.copy(from = it)) }
         )
 
         plan.toStops.forEachIndexed { index, stopValue ->
@@ -97,22 +280,20 @@ fun TripPlannerScreen() {
                     value = stopValue,
                     onValueChange = { new ->
                         val updated = plan.toStops.toMutableList().also { it[index] = new }
-                        updatePlan(plan.copy(toStops = updated))
+                        onPlanChange(plan.copy(toStops = updated))
                     },
                     modifier = Modifier.weight(1f)
                 )
                 if (plan.toStops.size > 1) {
                     IconButton(onClick = {
                         val updated = plan.toStops.toMutableList().also { it.removeAt(index) }
-                        updatePlan(plan.copy(toStops = updated))
+                        onPlanChange(plan.copy(toStops = updated))
                     }) {
                         Icon(Icons.Filled.Close, contentDescription = "Remove this stop")
                     }
                 }
                 if (index == plan.toStops.lastIndex && plan.toStops.size < RoutePlan.MAX_TO_STOPS) {
-                    IconButton(onClick = {
-                        updatePlan(plan.copy(toStops = plan.toStops + ""))
-                    }) {
+                    IconButton(onClick = { onPlanChange(plan.copy(toStops = plan.toStops + "")) }) {
                         Icon(Icons.Filled.Add, contentDescription = "Add another stop")
                     }
                 }
@@ -122,131 +303,515 @@ fun TripPlannerScreen() {
             Text(
                 "Up to ${RoutePlan.MAX_TO_STOPS} stops — that's the max for now.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(MaterialTheme.shapes.large)
+                .background(MaterialTheme.colorScheme.inverseSurface)
+                .clickable { onPlanChange(plan.copy(roundTrip = !plan.roundTrip)) }
+                .padding(Spacing.sm)
         ) {
             Checkbox(
                 checked = plan.roundTrip,
-                onCheckedChange = { updatePlan(plan.copy(roundTrip = it)) }
+                onCheckedChange = { onPlanChange(plan.copy(roundTrip = it)) },
+                colors = CheckboxDefaults.colors(
+                    checkedColor = MaterialTheme.colorScheme.tertiary,
+                    uncheckedColor = MaterialTheme.colorScheme.inverseOnSurface
+                )
             )
             Spacer(Modifier.width(4.dp))
-            Text("This is a round trip (I'll return to the start)")
-        }
-
-        HorizontalDivider()
-
-        Text("Break at every", style = MaterialTheme.typography.titleMedium)
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            OutlinedTextField(
-                value = plan.breakEvery,
-                onValueChange = { new -> if (new.all { it.isDigit() }) updatePlan(plan.copy(breakEvery = new)) },
-                label = { Text("Number") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
-                modifier = Modifier.width(120.dp)
-            )
-            Spacer(Modifier.width(16.dp))
             Column {
-                BreakUnitOption(
-                    label = "Kilometers",
-                    selected = plan.breakUnit == BreakUnit.KM,
-                    onSelect = { updatePlan(plan.copy(breakUnit = BreakUnit.KM)) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Filled.Loop,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.inverseOnSurface,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "Round trip (return to starting point)",
+                        color = MaterialTheme.colorScheme.inverseOnSurface,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReadOnlyRouteCard(plan: RoutePlan) {
+    val validStops = plan.toStops.map { it.trim() }.filter { it.isNotBlank() }
+    ElevatedCard {
+        Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+            Row(
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(plan.tripName.ifBlank { "This trip's route" }, style = MaterialTheme.typography.titleMedium)
+                Icon(
+                    Icons.Filled.Lock,
+                    contentDescription = "Locked by the Organizer",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
                 )
-                BreakUnitOption(
-                    label = "Hours",
-                    selected = plan.breakUnit == BreakUnit.HOURS,
-                    onSelect = { updatePlan(plan.copy(breakUnit = BreakUnit.HOURS)) }
+            }
+            Text(
+                "Only the Organizer can change the route. You can propose changes below.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text("From: ${plan.from.ifBlank { "Not set yet" }}", style = MaterialTheme.typography.bodyLarge)
+            validStops.forEachIndexed { i, stop ->
+                Text("Stop ${i + 1}: $stop", style = MaterialTheme.typography.bodyMedium)
+            }
+            if (plan.roundTrip) {
+                Text(
+                    "Round trip — returns to the starting point",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary
                 )
             }
         }
+    }
+}
 
-        HorizontalDivider()
-
-        Text("Route preference", style = MaterialTheme.typography.titleMedium)
-        RoutePrefOption(
-            label = "Fastest route",
-            selected = plan.routePreference == RoutePreference.FASTEST,
-            onSelect = { updatePlan(plan.copy(routePreference = RoutePreference.FASTEST)) }
-        )
-        RoutePrefOption(
-            label = "Surprise me",
-            selected = plan.routePreference == RoutePreference.SURPRISE,
-            onSelect = { updatePlan(plan.copy(routePreference = RoutePreference.SURPRISE)) }
-        )
-        if (plan.routePreference == RoutePreference.SURPRISE) {
-            Text(
-                "Google Maps will open with directions — tap \"Alternate routes\" inside Maps for something other than the fastest one.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
+@Composable
+private fun PitstopEngineCard(
+    plan: RoutePlan,
+    onPlanChange: (RoutePlan) -> Unit,
+    selectedPreferences: Set<String>,
+    onTogglePreference: (String) -> Unit,
+    computedPitstops: List<RouteRepository.Pitstop>,
+    findingPitstops: Boolean,
+    enabled: Boolean,
+    onGeneratePitstops: () -> Unit,
+    pitstopMessage: String?
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(Icons.Filled.Tune, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Text("Smart Pitstop Engine", style = MaterialTheme.typography.titleMedium)
         }
 
-        Spacer(Modifier.height(8.dp))
-
-        val hasRoute = plan.from.isNotBlank() && plan.toStops.any { it.isNotBlank() }
-
-        Button(
-            onClick = { openInGoogleMaps(context, plan) },
-            enabled = hasRoute,
-            modifier = Modifier.fillMaxWidth().height(52.dp)
-        ) {
-            Icon(Icons.Filled.Map, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text(
-                if (plan.roundTrip) "Open route in Google Maps (there & back)" else "Open route in Google Maps",
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-
-        Spacer(Modifier.height(4.dp))
-
-        OutlinedButton(
-            onClick = {
-                findingPitstops = true
-                pitstopMessage = null
-                scope.launch {
-                    val orderedNames = listOf(plan.from) + plan.toStops
-                    val breakValue = plan.breakEvery.toDoubleOrNull()
-                    val pitstops = RouteRepository.suggestPitstops(
-                        orderedPlaceNames = orderedNames,
-                        breakEveryKm = if (plan.breakUnit == BreakUnit.KM) breakValue else null,
-                        breakEveryHours = if (plan.breakUnit == BreakUnit.HOURS) breakValue else null
+        ElevatedCard {
+            Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                Text(
+                    "Break calculation mode",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BreakUnitOption(
+                        label = "By kilometers (km)",
+                        selected = plan.breakUnit == BreakUnit.KM,
+                        onSelect = { onPlanChange(plan.copy(breakUnit = BreakUnit.KM)) }
                     )
-                    findingPitstops = false
-                    if (pitstops.isEmpty()) {
-                        pitstopMessage = "Couldn't find pitstops right now — check your internet connection, your places, and that a break amount is set."
-                    } else {
-                        addSuggestedStopsToItinerary(context, pitstops)
-                        pitstopMessage = "Added ${pitstops.size} suggested stop${if (pitstops.size == 1) "" else "s"} to Day 1 of your Itinerary — edit them there any time."
+                    BreakUnitOption(
+                        label = "By hours (hrs)",
+                        selected = plan.breakUnit == BreakUnit.HOURS,
+                        onSelect = { onPlanChange(plan.copy(breakUnit = BreakUnit.HOURS)) }
+                    )
+                }
+
+                Text(
+                    "Stop frequency",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                val presets = if (plan.breakUnit == BreakUnit.KM) listOf(80, 100, 150) else listOf(1, 2, 3)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    presets.forEach { preset ->
+                        val label = if (plan.breakUnit == BreakUnit.KM) "Every $preset km" else "Every $preset hr"
+                        val selected = plan.breakEvery == preset.toString()
+                        FilterChip(
+                            selected = selected,
+                            onClick = { onPlanChange(plan.copy(breakEvery = preset.toString())) },
+                            label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                            modifier = Modifier.weight(1f)
+                        )
                     }
                 }
-            },
-            enabled = hasRoute && !findingPitstops && plan.breakEvery.toDoubleOrNull() != null,
-            modifier = Modifier.fillMaxWidth().height(48.dp)
-        ) {
-            if (findingPitstops) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-                Text("Finding pitstops…")
-            } else {
-                Text("Suggest pitstops for Itinerary")
+                OutlinedTextField(
+                    value = plan.breakEvery,
+                    onValueChange = { new -> if (new.all { it.isDigit() }) onPlanChange(plan.copy(breakEvery = new)) },
+                    label = { Text("Or type a custom number") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.width(220.dp)
+                )
+
+                Text(
+                    "Group pitstop preferences",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRowPreferences(selectedPreferences = selectedPreferences, onToggle = onTogglePreference)
+
+                Text(
+                    "Route preference",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    RoutePrefOption(
+                        label = "Fastest route",
+                        selected = plan.routePreference == RoutePreference.FASTEST,
+                        onSelect = { onPlanChange(plan.copy(routePreference = RoutePreference.FASTEST)) }
+                    )
+                    RoutePrefOption(
+                        label = "Surprise me",
+                        selected = plan.routePreference == RoutePreference.SURPRISE,
+                        onSelect = { onPlanChange(plan.copy(routePreference = RoutePreference.SURPRISE)) }
+                    )
+                }
+
+                Button(
+                    onClick = onGeneratePitstops,
+                    enabled = enabled && !findingPitstops,
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) {
+                    if (findingPitstops) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Finding pitstops…")
+                    } else {
+                        Text("Generate pitstops for Itinerary")
+                    }
+                }
+                pitstopMessage?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                }
+
+                if (computedPitstops.isNotEmpty()) {
+                    Text(
+                        "Generated route pitstops",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    computedPitstops.forEachIndexed { i, stop ->
+                        Row(
+                            verticalAlignment = Alignment.Top,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(MaterialTheme.shapes.small)
+                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                .padding(Spacing.xs)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(MaterialTheme.shapes.extraLarge)
+                                    .background(MaterialTheme.colorScheme.primaryContainer),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "${i + 1}",
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text(stop.placeName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "~${stop.distanceKm.roundToInt()} km from start",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
-        Text(
-            "Uses free OpenStreetMap data to find real places roughly every \"break at every\" interval along your route.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-        )
-        pitstopMessage?.let {
-            Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+@Composable
+private fun FlowRowPreferences(selectedPreferences: Set<String>, onToggle: (String) -> Unit) {
+    data class Pref(val label: String, val icon: ImageVector)
+    val options = listOf(
+        Pref("Temples & Spiritual", Icons.Filled.AccountBalance),
+        Pref("Dhabas & Highway Food", Icons.Filled.Restaurant),
+        Pref("Heritage & Forts", Icons.Filled.LocationCity),
+        Pref("EV Charging / Fuel", Icons.Filled.LocalGasStation),
+        Pref("Scenic Viewpoints", Icons.Filled.Landscape)
+    )
+    // Two rows of chips (FlowRow isn't in this project's Compose foundation version), wrapped manually.
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.chunked(2).forEach { rowItems ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                rowItems.forEach { pref ->
+                    FilterChip(
+                        selected = pref.label in selectedPreferences,
+                        onClick = { onToggle(pref.label) },
+                        leadingIcon = { Icon(pref.icon, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        label = { Text(pref.label, style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RouteSummaryCard(
+    loading: Boolean,
+    routeInfo: RouteRepository.RouteInfo?,
+    hasRoute: Boolean,
+    onOpenMaps: () -> Unit
+) {
+    ElevatedCard {
+        Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Filled.Explore, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Text("Route summary", style = MaterialTheme.typography.titleMedium)
+            }
+            when {
+                loading -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Calculating route…", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                routeInfo != null -> {
+                    val km = (routeInfo.distanceMeters / 1000.0).roundToInt()
+                    val hours = (routeInfo.durationSeconds / 3600).toInt()
+                    val minutes = ((routeInfo.durationSeconds % 3600) / 60).toInt()
+                    Text(
+                        "$km km • ${if (hours > 0) "${hours}h " else ""}${minutes}m",
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                    Text(
+                        "Free route estimate via OpenStreetMap/OSRM",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                hasRoute -> Text(
+                    "Couldn't calculate a route right now — check your internet connection.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                else -> Text(
+                    "Fill in From and at least one destination to see distance and duration.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Button(
+                onClick = onOpenMaps,
+                enabled = hasRoute,
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) {
+                Icon(Icons.Filled.Map, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Open in Google Maps", fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TripMembersCard(session: LocalStore.Session, members: List<Member>, scope: kotlinx.coroutines.CoroutineScope) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    var showAddPeople by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        Row(
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon(Icons.Filled.Group, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Text("Trip members (${members.size})", style = MaterialTheme.typography.titleMedium)
+            }
+            TextButton(onClick = { showAddPeople = true }) {
+                Icon(Icons.Filled.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Add")
+            }
         }
 
-        Spacer(Modifier.height(24.dp))
+        ElevatedCard {
+            Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                members.forEach { member ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        InitialsAvatar(name = member.name, size = 36.dp)
+                        Spacer(Modifier.width(Spacing.xs))
+                        Text(member.name, modifier = Modifier.weight(1f))
+                        AssistChip(
+                            onClick = {},
+                            enabled = false,
+                            label = {
+                                Text(
+                                    if (member.role == MemberRole.ORGANIZER) "Organizer" else "Joiner",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        )
+                    }
+                }
+
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "Trip code: ${session.tripCode}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { clipboard.setText(AnnotatedString(session.tripCode)) }) {
+                        Text("Copy code")
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAddPeople) {
+        AlertDialog(
+            onDismissRequest = { showAddPeople = false },
+            title = { Text("Add a travel companion") },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val name = newName.trim()
+                        if (name.isNotBlank()) {
+                            scope.launch { TripRepository.joinTrip(session.tripCode, name, role = MemberRole.JOINER) }
+                        }
+                        newName = ""
+                        showAddPeople = false
+                    },
+                    enabled = newName.isNotBlank()
+                ) { Text("Add") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddPeople = false }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun RouteSuggestionsCard(
+    isOrganizer: Boolean,
+    suggestions: List<RouteSuggestion>,
+    currentMemberId: String,
+    suggestionText: String,
+    onSuggestionTextChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onAccept: (String) -> Unit,
+    onDismiss: (String) -> Unit
+) {
+    val visibleSuggestions = if (isOrganizer) suggestions else suggestions.filter { it.authorMemberId == currentMemberId }
+
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(Icons.Filled.QuestionAnswer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Text(
+                if (isOrganizer) "Joiner change suggestions" else "Suggest a change to the Organizer",
+                style = MaterialTheme.typography.titleMedium
+            )
+        }
+
+        ElevatedCard {
+            Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = suggestionText,
+                    onValueChange = onSuggestionTextChange,
+                    placeholder = { Text("Suggest a route change or stop to discuss with the group…") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Button(onClick = onSubmit, enabled = suggestionText.isNotBlank()) {
+                        Icon(Icons.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (isOrganizer) "Post route note" else "Send suggestion")
+                    }
+                }
+            }
+        }
+
+        if (visibleSuggestions.isEmpty()) {
+            Text(
+                if (isOrganizer) "No suggestions yet." else "Your suggestions to the Organizer will appear here.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        visibleSuggestions.forEach { suggestion ->
+            ElevatedCard {
+                Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(suggestion.authorName, fontWeight = FontWeight.Bold)
+                        Text(
+                            when (suggestion.status) {
+                                SuggestionStatus.PENDING -> "Pending"
+                                SuggestionStatus.ACCEPTED -> "Accepted"
+                                SuggestionStatus.DISMISSED -> "Dismissed"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = when (suggestion.status) {
+                                SuggestionStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
+                                SuggestionStatus.ACCEPTED -> MaterialTheme.colorScheme.tertiary
+                                SuggestionStatus.DISMISSED -> MaterialTheme.colorScheme.error
+                            }
+                        )
+                    }
+                    Text(suggestion.text, style = MaterialTheme.typography.bodyMedium)
+                    if (isOrganizer && suggestion.status == SuggestionStatus.PENDING) {
+                        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                            TextButton(onClick = { onDismiss(suggestion.id) }) {
+                                Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Dismiss")
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Button(onClick = { onAccept(suggestion.id) }) {
+                                Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Accept")
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -319,7 +884,7 @@ private fun BreakUnitOption(label: String, selected: Boolean, onSelect: () -> Un
         modifier = Modifier.selectable(selected = selected, onClick = onSelect)
     ) {
         RadioButton(selected = selected, onClick = onSelect)
-        Text(label)
+        Text(label, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -330,7 +895,7 @@ private fun RoutePrefOption(label: String, selected: Boolean, onSelect: () -> Un
         modifier = Modifier.selectable(selected = selected, onClick = onSelect)
     ) {
         RadioButton(selected = selected, onClick = onSelect)
-        Text(label)
+        Text(label, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -354,32 +919,4 @@ private fun openInGoogleMaps(context: Context, plan: RoutePlan) {
     } catch (e: ActivityNotFoundException) {
         Toast.makeText(context, "Couldn't open Google Maps — is it installed?", Toast.LENGTH_LONG).show()
     }
-}
-
-/** Appends the given pitstops as new, clearly-tagged rows to Day 1 of the saved itinerary
- *  (creating Day 1 if it doesn't exist yet). Existing rows are left untouched. */
-private fun addSuggestedStopsToItinerary(context: Context, pitstops: List<RouteRepository.Pitstop>) {
-    val days = LocalStore.loadItinerary(context).toMutableList()
-    val dayIndex = days.indexOfFirst { it.label == "Day 1" }
-    val day1 = if (dayIndex >= 0) days[dayIndex] else ItineraryDay(id = UUID.randomUUID().toString(), label = "Day 1")
-    var nextOrder = (day1.stops.maxOfOrNull { it.order } ?: -1) + 1
-
-    val newStops = pitstops.map { p ->
-        val hours = (p.elapsedMinutes / 60).toInt()
-        val minutes = (p.elapsedMinutes % 60).roundToInt()
-        val elapsed = if (hours > 0) "${hours}h ${minutes}m" else "${minutes}m"
-        ItineraryStop(
-            id = UUID.randomUUID().toString(),
-            fromTime = "",
-            tillTime = "",
-            place = p.placeName,
-            notes = "Suggested break • ~${p.distanceKm.roundToInt()} km / $elapsed from start",
-            order = nextOrder++,
-            isSuggested = true
-        )
-    }
-
-    val updatedDay1 = day1.copy(stops = day1.stops + newStops)
-    if (dayIndex >= 0) days[dayIndex] = updatedDay1 else days.add(0, updatedDay1)
-    LocalStore.saveItinerary(context, days)
 }
