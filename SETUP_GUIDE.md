@@ -54,7 +54,8 @@ Skip this whole section unless you're setting the app up again from a brand new,
 4. Click through to **Continue to console**.
 5. Left menu → **Build → Firestore Database** → **Create database** → any nearby location → **Production mode** → **Enable**.
 6. Click the **Rules** tab, delete everything there, paste in the contents of `firestore.rules` from your YatraMitra folder, click **Publish**.
-7. Back in your GitHub repo, open `app/google-services.json`, click the pencil icon, delete the placeholder content, paste in your real downloaded file's content instead, and **Commit changes**.
+7. Left menu → **Build → Authentication** → **Get started** (if shown) → **Sign-in method** tab → click **Anonymous** → toggle **Enable** → **Save**. The app signs everyone in anonymously automatically, and every trip/route/itinerary/expense action needs this enabled or you'll see "Couldn't create a trip" / "Couldn't join" errors.
+8. Back in your GitHub repo, open `app/google-services.json`, click the pencil icon, delete the placeholder content, paste in your real downloaded file's content instead, and **Commit changes**.
 
 From here on, use the "Updating the app" section above for every future change.
 
@@ -81,5 +82,6 @@ Opening the app now always starts with **Create a new trip** (you become its *Or
 
 - **Red ✗ on the GitHub Action**: click into the run and open the "Build debug APK" step, search the log for `e: file`, and send Claude those lines — that's the actual error, not the big stack trace above it.
 - **"App not installed" on your phone**: first, make sure you downloaded `app-debug.apk` itself (not the `.zip` it came in) and that your phone has a few hundred MB of free storage. If those are fine, it's almost always a signing-key mismatch with whatever version is already on your phone — **uninstall YatraMitra from the phone first, then install the new APK.** The workflow caches one debug signing key across builds specifically to prevent this, but the very first build after that caching was added (or after a "Clear cache" done manually on GitHub) will still differ from whatever you already have installed.
+- **"Couldn't create a trip" / "Couldn't join" right after opening the app**: almost always means Anonymous sign-in isn't enabled — Firebase Console → **Build → Authentication → Sign-in method** → make sure **Anonymous** is enabled (see Part 2, step 7). Also double-check the **Rules** tab under Firestore Database shows the latest contents of `firestore.rules` and that you clicked **Publish** after pasting.
 - **Expenses don't sync between phones**: double-check both phones used the exact same trip code, and that your real `google-services.json` (not the placeholder) is committed in `app/`.
 - **Pitstop suggestions come back empty**: the free map services occasionally have no data for very remote areas, or a typed place couldn't be found — try a slightly more specific place name, or check your internet connection.

@@ -24,7 +24,10 @@ object RouteRepository {
     data class RouteInfo(
         val points: List<RoutePoint>,   // full route geometry, in order
         val distanceMeters: Double,
-        val durationSeconds: Double
+        val durationSeconds: Double,
+        // One entry per pair of consecutive input waypoints (OSRM "legs"), so callers can work out
+        // each named stop's cumulative distance from the start without re-walking the geometry.
+        val legDistancesMeters: List<Double> = emptyList()
     )
 
     /** A suggested pitstop: a place name plus how far into the route it falls. */
@@ -57,7 +60,13 @@ object RouteRepository {
                     val pair = coords.getJSONArray(i)
                     RoutePoint(lat = pair.getDouble(1), lon = pair.getDouble(0))
                 }
-                RouteInfo(points, distance, duration)
+                val legs = route.optJSONArray("legs")
+                val legDistances = if (legs != null) {
+                    (0 until legs.length()).map { legs.getJSONObject(it).optDouble("distance", 0.0) }
+                } else {
+                    emptyList()
+                }
+                RouteInfo(points, distance, duration, legDistances)
             }
         } catch (e: Exception) {
             null

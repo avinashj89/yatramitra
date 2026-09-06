@@ -35,6 +35,7 @@ import com.avinash.yatramitra.data.TripRepository
 import com.avinash.yatramitra.model.Expense
 import com.avinash.yatramitra.model.Member
 import com.avinash.yatramitra.model.MemberRole
+import com.avinash.yatramitra.ui.util.launchSafely
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
 import java.util.Locale
@@ -43,7 +44,7 @@ import kotlin.math.abs
 private const val MAX_MEMBERS = 50
 
 /** The trip's creator becomes its Organizer; everyone who joins by code (or is added by name)
- *  is a Joiner. Shown app-wide (from [com.avinash.yatramitra.YatraMitraApp]) before any trip
+ *  is a Group Member. Shown app-wide (from [com.avinash.yatramitra.YatraMitraApp]) before any trip
  *  session exists — every tab is trip-scoped now, not just Expenses. */
 @Composable
 fun JoinTripScreen(onJoined: (String, String, String) -> Unit) {
@@ -147,7 +148,7 @@ fun JoinTripScreen(onJoined: (String, String, String) -> Unit) {
 }
 
 @Composable
-fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit) {
+fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit, onError: (String) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var members by remember { mutableStateOf<List<Member>>(emptyList()) }
@@ -210,7 +211,7 @@ fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit) {
                                         modifier = Modifier.weight(1f)
                                     )
                                     IconButton(onClick = {
-                                        scope.launch {
+                                        scope.launchSafely(onError, "Couldn't save the group name — check your internet connection.") {
                                             TripRepository.updateGroupName(session.tripCode, groupNameDraft)
                                             editingGroupName = false
                                         }
@@ -436,7 +437,9 @@ fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit) {
                         Spacer(Modifier.width(12.dp))
                         IconButton(
                             onClick = {
-                                scope.launch { TripRepository.deleteExpense(session.tripCode, expense.id) }
+                                scope.launchSafely(onError, "Couldn't delete that expense — check your internet connection.") {
+                                    TripRepository.deleteExpense(session.tripCode, expense.id)
+                                }
                             },
                             modifier = Modifier.size(20.dp)
                         ) {
@@ -453,7 +456,9 @@ fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit) {
             initialUpiId = myUpiId,
             onDismiss = { showUpiDialog = false },
             onSave = { upiId ->
-                scope.launch { TripRepository.updateMemberUpiId(session.tripCode, session.memberId, upiId) }
+                scope.launchSafely(onError, "Couldn't save your UPI ID — check your internet connection.") {
+                    TripRepository.updateMemberUpiId(session.tripCode, session.memberId, upiId)
+                }
                 showUpiDialog = false
             }
         )
@@ -463,7 +468,9 @@ fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit) {
         AddPeopleDialog(
             currentMemberCount = members.size,
             onAddName = { name ->
-                scope.launch { TripRepository.joinTrip(session.tripCode, name, role = MemberRole.JOINER) }
+                scope.launchSafely(onError, "Couldn't add that person — check your internet connection.") {
+                    TripRepository.joinTrip(session.tripCode, name, role = MemberRole.JOINER)
+                }
             },
             onDismiss = { showAddPeople = false }
         )
@@ -480,7 +487,9 @@ fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit) {
                 editingExpense = null
             },
             onSave = { expense ->
-                scope.launch {
+                // Keep the dialog open on failure (rather than closing it) so the user doesn't
+                // lose what they typed and can just retry.
+                scope.launchSafely(onError, "Couldn't save that expense — check your internet connection and try again.") {
                     if (editingExpense == null) {
                         TripRepository.addExpense(session.tripCode, expense)
                     } else {

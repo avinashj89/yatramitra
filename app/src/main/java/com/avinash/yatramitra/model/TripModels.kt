@@ -49,7 +49,7 @@ data class PlaceSuggestion(
     val lon: Double
 )
 
-/** Whether a trip member created the trip (Organizer) or joined it (Joiner). This gates which
+/** Whether a trip member created the trip (Organizer) or joined it (Group Member). This gates which
  *  edit affordances the UI shows — same trust model as today, where anyone with the trip code
  *  can already read/write everything in Firestore; the role is a UI convention, not a hard
  *  security boundary. */

@@ -37,6 +37,7 @@ import com.avinash.yatramitra.model.MemberRole
 import com.avinash.yatramitra.model.StopSource
 import com.avinash.yatramitra.model.SuggestionStatus
 import com.avinash.yatramitra.ui.theme.Spacing
+import com.avinash.yatramitra.ui.util.launchSafely
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -44,7 +45,8 @@ import java.util.UUID
 fun ItineraryScreen(
     session: LocalStore.Session,
     members: List<Member>,
-    currentRole: MemberRole
+    currentRole: MemberRole,
+    onError: (String) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -82,7 +84,9 @@ fun ItineraryScreen(
     val selectedDay = sortedDays.find { it.id == selectedDayId }
 
     fun persistDay(day: ItineraryDay) {
-        scope.launch { TripRepository.saveItineraryDay(session.tripCode, day) }
+        scope.launchSafely(onError, "Couldn't save your changes — check your internet connection.") {
+            TripRepository.saveItineraryDay(session.tripCode, day)
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -95,7 +99,7 @@ fun ItineraryScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
-                JoinerReadOnlyBanner()
+                GroupMemberReadOnlyBanner()
             }
         }
 
@@ -151,7 +155,9 @@ fun ItineraryScreen(
                         day = selectedDay,
                         isOrganizer = isOrganizer,
                         onDelete = {
-                            scope.launch { TripRepository.deleteItineraryDay(session.tripCode, selectedDay.id) }
+                            scope.launchSafely(onError, "Couldn't delete this day — check your internet connection.") {
+                                TripRepository.deleteItineraryDay(session.tripCode, selectedDay.id)
+                            }
                         }
                     )
                 }
@@ -203,17 +209,21 @@ fun ItineraryScreen(
                         onSubmit = {
                             val text = suggestionText.trim()
                             if (text.isNotBlank()) {
-                                scope.launch {
+                                scope.launchSafely(onError, "Couldn't send your suggestion — check your internet connection.") {
                                     TripRepository.addItinerarySuggestion(session.tripCode, session.memberId, currentMemberName, text)
                                     suggestionText = ""
                                 }
                             }
                         },
                         onAccept = { id ->
-                            scope.launch { TripRepository.updateItinerarySuggestionStatus(session.tripCode, id, SuggestionStatus.ACCEPTED) }
+                            scope.launchSafely(onError, "Couldn't accept that suggestion — check your internet connection.") {
+                                TripRepository.updateItinerarySuggestionStatus(session.tripCode, id, SuggestionStatus.ACCEPTED)
+                            }
                         },
                         onDismiss = { id ->
-                            scope.launch { TripRepository.updateItinerarySuggestionStatus(session.tripCode, id, SuggestionStatus.DISMISSED) }
+                            scope.launchSafely(onError, "Couldn't dismiss that suggestion — check your internet connection.") {
+                                TripRepository.updateItinerarySuggestionStatus(session.tripCode, id, SuggestionStatus.DISMISSED)
+                            }
                         }
                     )
                 }
@@ -240,7 +250,7 @@ fun ItineraryScreen(
 }
 
 @Composable
-private fun JoinerReadOnlyBanner() {
+private fun GroupMemberReadOnlyBanner() {
     Row(
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
@@ -257,7 +267,7 @@ private fun JoinerReadOnlyBanner() {
         )
         Column {
             Text(
-                "Role: Joiner (read-only)",
+                "Role: Group Member (read-only)",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold
             )
@@ -359,7 +369,7 @@ private fun ItinerarySuggestionsCard(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Icon(Icons.Filled.QuestionAnswer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Text(
-                if (isOrganizer) "Joiner schedule suggestions" else "Suggest a timing or activity change",
+                if (isOrganizer) "Group Member schedule suggestions" else "Suggest a timing or activity change",
                 style = MaterialTheme.typography.titleMedium
             )
         }

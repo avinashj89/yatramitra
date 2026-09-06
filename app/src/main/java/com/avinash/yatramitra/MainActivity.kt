@@ -32,11 +32,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
@@ -84,7 +87,7 @@ private val destinations = listOf(
     TopLevelDestination("expenses", "Expenses", Icons.Filled.AccountBalanceWallet)
 )
 
-/** Every tab is trip-scoped now (Organizer/Joiner roles, live sync), not just Expenses — so the
+/** Every tab is trip-scoped now (Organizer/Group Member roles, live sync), not just Expenses — so the
  *  whole app gates on having a trip session before showing the bottom-nav'd tabs at all. */
 @Composable
 fun YatraMitraApp() {
@@ -120,6 +123,8 @@ fun YatraMitraApp() {
 private fun TripScaffold(session: LocalStore.Session, onLeaveTrip: () -> Unit) {
     val context = LocalContext.current
     val navController = rememberNavController()
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     var members by remember { mutableStateOf<List<Member>>(emptyList()) }
     var groupName by remember { mutableStateOf("") }
 
@@ -129,6 +134,7 @@ private fun TripScaffold(session: LocalStore.Session, onLeaveTrip: () -> Unit) {
     }
 
     val currentRole = members.find { it.id == session.memberId }?.role ?: MemberRole.JOINER
+    val onError: (String) -> Unit = { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
 
     Scaffold(
         topBar = {
@@ -147,6 +153,7 @@ private fun TripScaffold(session: LocalStore.Session, onLeaveTrip: () -> Unit) {
                 }
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             NavigationBar {
                 val backStackEntry by navController.currentBackStackEntryAsState()
@@ -178,12 +185,14 @@ private fun TripScaffold(session: LocalStore.Session, onLeaveTrip: () -> Unit) {
             modifier = Modifier.padding(innerPadding)
         ) {
             composable("route-and-stops") {
-                TripPlannerScreen(session = session, members = members, currentRole = currentRole)
+                TripPlannerScreen(session = session, members = members, currentRole = currentRole, onError = onError)
             }
             composable("itinerary") {
-                ItineraryScreen(session = session, members = members, currentRole = currentRole)
+                ItineraryScreen(session = session, members = members, currentRole = currentRole, onError = onError)
             }
-            composable("expenses") { ExpensesScreen(session = session, onLeaveTrip = onLeaveTrip) }
+            composable("expenses") {
+                ExpensesScreen(session = session, onLeaveTrip = onLeaveTrip, onError = onError)
+            }
         }
     }
 }
@@ -232,7 +241,7 @@ private fun TripTopBar(role: MemberRole, memberName: String, onInvite: () -> Uni
             AssistChip(
                 onClick = {},
                 enabled = false,
-                label = { Text(if (role == MemberRole.ORGANIZER) "Organizer View" else "Joiner View") }
+                label = { Text(if (role == MemberRole.ORGANIZER) "Organizer View" else "Group Member View") }
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
