@@ -174,18 +174,20 @@ fun TripPlannerScreen(
                     ) {
                         val orderedNames = listOf(plan.from) + plan.toStops
                         val breakValue = plan.breakEvery.toDoubleOrNull()
-                        val pitstops = RouteRepository.suggestPitstops(
-                            orderedPlaceNames = orderedNames,
-                            breakEveryKm = if (plan.breakUnit == BreakUnit.KM) breakValue else null,
-                            breakEveryHours = if (plan.breakUnit == BreakUnit.HOURS) breakValue else null
-                        )
-                        findingPitstops = false
-                        computedPitstops = pitstops
-                        pitstopMessage = if (pitstops.isEmpty()) {
-                            "Couldn't find pitstops right now — check your internet connection, your places, and that a break amount is set."
-                        } else {
+                        try {
+                            val pitstops = RouteRepository.suggestPitstops(
+                                orderedPlaceNames = orderedNames,
+                                breakEveryKm = if (plan.breakUnit == BreakUnit.KM) breakValue else null,
+                                breakEveryHours = if (plan.breakUnit == BreakUnit.HOURS) breakValue else null
+                            )
+                            computedPitstops = pitstops
                             TripRepository.regenerateDay1FromRoute(session.tripCode, plan, pitstops)
-                            "Added ${pitstops.size} suggested stop${if (pitstops.size == 1) "" else "s"} to Day 1 of your Itinerary — edit them there any time."
+                            pitstopMessage = "Added ${pitstops.size} suggested stop${if (pitstops.size == 1) "" else "s"} to Day 1 of your Itinerary — edit them there any time."
+                        } catch (e: RouteRepository.PitstopUnavailableException) {
+                            computedPitstops = emptyList()
+                            pitstopMessage = e.message
+                        } finally {
+                            findingPitstops = false
                         }
                     }
                 },

@@ -57,6 +57,31 @@ object PlacesRepository {
         return searchPlaces(place).firstOrNull()
     }
 
+    /** Like [geocode], but rethrows a network/HTTP failure instead of masking it as "not found" —
+     *  [searchPlaces] deliberately swallows every failure to keep the live-typing dropdown from
+     *  ever crashing, but that also makes a real place name look identical to a dead network. This
+     *  is for callers (pitstop generation) that need to tell a user their internet is down instead
+     *  of wrongly claiming a real place like "Bangalore" doesn't exist. */
+    suspend fun geocodeOrThrow(place: String): PlaceSuggestion? = withContext(Dispatchers.IO) {
+        val query = place.trim()
+        if (query.length < 2) return@withContext null
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val url = "https://nominatim.openstreetmap.org/search?q=$encoded&format=json&limit=1&addressdetails=0"
+        val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw java.io.IOException("Place search failed (HTTP ${response.code})")
+            }
+            val arr = JSONArray(response.body?.string().orEmpty())
+            if (arr.length() == 0) return@withContext null
+            val obj = arr.getJSONObject(0)
+            val displayName = obj.optString("display_name").takeIf { it.isNotBlank() } ?: return@withContext null
+            val lat = obj.optString("lat").toDoubleOrNull() ?: return@withContext null
+            val lon = obj.optString("lon").toDoubleOrNull() ?: return@withContext null
+            PlaceSuggestion(displayName, lat, lon)
+        }
+    }
+
     /** Reverse-geocodes a coordinate to a short, human-readable place name. Falls back to "lat, lon" on failure. */
     suspend fun reverseGeocode(lat: Double, lon: Double): String = withContext(Dispatchers.IO) {
         try {

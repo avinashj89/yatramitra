@@ -10,6 +10,7 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -121,18 +122,44 @@ object RouteRepository {
         return fetchRoute(points)
     }
 
+    /** Thrown by [suggestPitstops] with a specific, user-facing reason for exactly which step
+     *  failed — geocoding a particular place, fetching the route, an invalid break amount, or a
+     *  route too short to need a break — instead of one generic "check your connection" message
+     *  that could mean any of those. */
+    class PitstopUnavailableException(message: String) : Exception(message)
+
     /**
      * End-to-end pitstop suggestion: geocode the named stops, fetch the route, sample points
      * according to the break preference, and look up a real nearby place name for each sample.
-     * Returns an empty list (rather than throwing) if anything along the way fails, so the UI
-     * can show a friendly "couldn't find pitstops right now" message.
+     * Throws [PitstopUnavailableException] with a specific reason if any step fails, so the UI
+     * can tell the user (and us) exactly what went wrong instead of a generic message.
      */
     suspend fun suggestPitstops(
         orderedPlaceNames: List<String>,
         breakEveryKm: Double? ,
         breakEveryHours: Double?
     ): List<Pitstop> {
-        val route = fetchRouteSummary(orderedPlaceNames) ?: return emptyList()
+        val validNames = orderedPlaceNames.map { it.trim() }.filter { it.isNotBlank() }
+        if (validNames.size < 2) {
+            throw PitstopUnavailableException("Add a From place and at least one To place first.")
+        }
+
+        val geocoded = try {
+            validNames.map { name -> name to PlacesRepository.geocodeOrThrow(name) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw PitstopUnavailableException("Couldn't reach the place-lookup service — check your internet connection and try again.")
+        }
+        val badName = geocoded.firstOrNull { it.second == null }?.first
+        if (badName != null) {
+            throw PitstopUnavailableException("Couldn't find \"$badName\" — check the spelling or try a nearby landmark.")
+        }
+
+        val points = geocoded.map { RoutePoint(it.second!!.lat, it.second!!.lon) }
+        val route = fetchRoute(points)
+            ?: throw PitstopUnavailableException("Couldn't calculate a route between your stops — check your internet connection and try again.")
+
         val totalKm = route.distanceMeters / 1000.0
         val totalHours = route.durationSeconds / 3600.0
         val avgSpeedKmh = if (totalHours > 0) totalKm / totalHours else 0.0
@@ -140,10 +167,16 @@ object RouteRepository {
         val intervalKm = when {
             breakEveryKm != null && breakEveryKm > 0 -> breakEveryKm
             breakEveryHours != null && breakEveryHours > 0 && avgSpeedKmh > 0 -> breakEveryHours * avgSpeedKmh
-            else -> return emptyList()
+            else -> throw PitstopUnavailableException("Enter a break amount greater than zero.")
         }
 
         val samples = samplePoints(route, intervalKm)
+        if (samples.isEmpty()) {
+            throw PitstopUnavailableException(
+                "Your route is about ${totalKm.roundToInt()} km — shorter than your break interval, so no pitstops are needed."
+            )
+        }
+
         val results = mutableListOf<Pitstop>()
         for ((point, km) in samples) {
             val name = PlacesRepository.findNearbyPitstop(point.lat, point.lon)
