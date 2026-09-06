@@ -18,7 +18,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
@@ -43,112 +42,8 @@ import kotlin.math.abs
 
 private const val MAX_MEMBERS = 50
 
-/** The trip's creator becomes its Organizer; everyone who joins by code (or is added by name)
- *  is a Group Member. Shown app-wide (from [com.avinash.yatramitra.YatraMitraApp]) before any trip
- *  session exists — every tab is trip-scoped now, not just Expenses. */
 @Composable
-fun JoinTripScreen(onJoined: (String, String, String) -> Unit) {
-    val scope = rememberCoroutineScope()
-    var name by remember { mutableStateOf("") }
-    var code by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text("YatraMitra", style = MaterialTheme.typography.titleLarge)
-        Text(
-            "Plan a route, build a day-by-day itinerary, and split expenses live with your travel group. Create a new trip to get a join code, or enter one you already have.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-        )
-
-        OutlinedTextField(
-            value = name,
-            onValueChange = { name = it },
-            label = { Text("Your name") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Button(
-            onClick = {
-                error = null
-                loading = true
-                scope.launch {
-                    try {
-                        val newCode = TripRepository.createTrip()
-                        val memberId = TripRepository.joinTrip(
-                            newCode,
-                            name.ifBlank { "Traveler" },
-                            role = MemberRole.ORGANIZER
-                        )
-                        onJoined(newCode, memberId, name.ifBlank { "Traveler" })
-                    } catch (e: Exception) {
-                        error = "Couldn't create a trip. Check your internet connection and try again."
-                    } finally {
-                        loading = false
-                    }
-                }
-            },
-            enabled = !loading,
-            modifier = Modifier.fillMaxWidth().height(48.dp)
-        ) { Text("Create a new trip") }
-
-        HorizontalDivider()
-
-        OutlinedTextField(
-            value = code,
-            onValueChange = { code = it.uppercase() },
-            label = { Text("Or enter a trip code") },
-            placeholder = { Text("e.g. 7F3K9Q") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedButton(
-            onClick = {
-                error = null
-                loading = true
-                scope.launch {
-                    try {
-                        val exists = TripRepository.tripExists(code.trim())
-                        if (!exists) {
-                            error = "No trip found with that code."
-                        } else {
-                            val memberId = TripRepository.joinTrip(
-                                code.trim(),
-                                name.ifBlank { "Traveler" },
-                                role = MemberRole.JOINER
-                            )
-                            onJoined(code.trim().uppercase(), memberId, name.ifBlank { "Traveler" })
-                        }
-                    } catch (e: Exception) {
-                        error = "Couldn't join — check your internet connection and try again."
-                    } finally {
-                        loading = false
-                    }
-                }
-            },
-            enabled = !loading && code.isNotBlank(),
-            modifier = Modifier.fillMaxWidth().height(48.dp)
-        ) { Text("Join trip") }
-
-        if (loading) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        }
-        error?.let {
-            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-        }
-    }
-}
-
-@Composable
-fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit, onError: (String) -> Unit) {
+fun ExpensesScreen(session: LocalStore.Session, isReadOnly: Boolean, onError: (String) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var members by remember { mutableStateOf<List<Member>>(emptyList()) }
@@ -180,11 +75,13 @@ fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit, onError
 
     Scaffold(
         floatingActionButton = {
-            FloatingActionButton(onClick = {
-                editingExpense = null
-                showAddExpense = true
-            }) {
-                Icon(Icons.Filled.Add, contentDescription = "Add expense")
+            if (!isReadOnly) {
+                FloatingActionButton(onClick = {
+                    editingExpense = null
+                    showAddExpense = true
+                }) {
+                    Icon(Icons.Filled.Add, contentDescription = "Add expense")
+                }
             }
         }
     ) { padding ->
@@ -224,27 +121,31 @@ fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit, onError
                                         style = MaterialTheme.typography.titleLarge,
                                         fontWeight = FontWeight.Bold
                                     )
-                                    IconButton(
-                                        onClick = {
-                                            groupNameDraft = groupName
-                                            editingGroupName = true
-                                        },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Filled.Edit,
-                                            contentDescription = "Edit group name",
-                                            modifier = Modifier.size(18.dp)
-                                        )
+                                    if (!isReadOnly) {
+                                        IconButton(
+                                            onClick = {
+                                                groupNameDraft = groupName
+                                                editingGroupName = true
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Edit,
+                                                contentDescription = "Edit group name",
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
                             Row {
-                                IconButton(
-                                    onClick = { showAddPeople = true },
-                                    enabled = members.size < MAX_MEMBERS
-                                ) {
-                                    Icon(Icons.Filled.PersonAdd, contentDescription = "Add people")
+                                if (!isReadOnly) {
+                                    IconButton(
+                                        onClick = { showAddPeople = true },
+                                        enabled = members.size < MAX_MEMBERS
+                                    ) {
+                                        Icon(Icons.Filled.PersonAdd, contentDescription = "Add people")
+                                    }
                                 }
                                 IconButton(onClick = {
                                     val send = Intent(Intent.ACTION_SEND).apply {
@@ -256,9 +157,6 @@ fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit, onError
                                     }
                                     context.startActivity(Intent.createChooser(send, "Share trip code"))
                                 }) { Icon(Icons.Filled.Share, contentDescription = "Share code") }
-                                IconButton(onClick = onLeaveTrip) {
-                                    Icon(Icons.Filled.ExitToApp, contentDescription = "Leave trip")
-                                }
                             }
                         }
                         Text("Trip code: ${session.tripCode}", style = MaterialTheme.typography.bodyMedium)
@@ -269,7 +167,7 @@ fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit, onError
                         )
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable { showUpiDialog = true }
+                            modifier = if (isReadOnly) Modifier else Modifier.clickable { showUpiDialog = true }
                         ) {
                             Icon(
                                 Icons.Filled.AccountBalance,
@@ -279,7 +177,12 @@ fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit, onError
                             )
                             Spacer(Modifier.width(4.dp))
                             Text(
-                                if (myUpiId.isBlank()) "Add your UPI ID for instant settle-up" else "Your UPI ID: $myUpiId (tap to edit)",
+                                when {
+                                    isReadOnly && myUpiId.isBlank() -> "No UPI ID on file"
+                                    isReadOnly -> "Your UPI ID: $myUpiId"
+                                    myUpiId.isBlank() -> "Add your UPI ID for instant settle-up"
+                                    else -> "Your UPI ID: $myUpiId (tap to edit)"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary
                             )
@@ -424,26 +327,28 @@ fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit, onError
                             )
                         }
                         Text(currency.format(expense.amount), fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.width(4.dp))
-                        IconButton(
-                            onClick = {
-                                editingExpense = expense
-                                showAddExpense = true
-                            },
-                            modifier = Modifier.size(20.dp)
-                        ) {
-                            Icon(Icons.Filled.Edit, contentDescription = "Edit expense", modifier = Modifier.size(18.dp))
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        IconButton(
-                            onClick = {
-                                scope.launchSafely(onError, "Couldn't delete that expense — check your internet connection.") {
-                                    TripRepository.deleteExpense(session.tripCode, expense.id)
-                                }
-                            },
-                            modifier = Modifier.size(20.dp)
-                        ) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Delete expense", modifier = Modifier.size(18.dp))
+                        if (!isReadOnly) {
+                            Spacer(Modifier.width(4.dp))
+                            IconButton(
+                                onClick = {
+                                    editingExpense = expense
+                                    showAddExpense = true
+                                },
+                                modifier = Modifier.size(20.dp)
+                            ) {
+                                Icon(Icons.Filled.Edit, contentDescription = "Edit expense", modifier = Modifier.size(18.dp))
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            IconButton(
+                                onClick = {
+                                    scope.launchSafely(onError, "Couldn't delete that expense — check your internet connection.") {
+                                        TripRepository.deleteExpense(session.tripCode, expense.id)
+                                    }
+                                },
+                                modifier = Modifier.size(20.dp)
+                            ) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Delete expense", modifier = Modifier.size(18.dp))
+                            }
                         }
                     }
                 }
@@ -467,9 +372,9 @@ fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit, onError
     if (showAddPeople) {
         AddPeopleDialog(
             currentMemberCount = members.size,
-            onAddName = { name ->
+            onAdd = { name, phone, email ->
                 scope.launchSafely(onError, "Couldn't add that person — check your internet connection.") {
-                    TripRepository.joinTrip(session.tripCode, name, role = MemberRole.JOINER)
+                    TripRepository.joinTrip(session.tripCode, name, role = MemberRole.JOINER, phone = phone, email = email)
                 }
             },
             onDismiss = { showAddPeople = false }
@@ -506,12 +411,15 @@ fun ExpensesScreen(session: LocalStore.Session, onLeaveTrip: () -> Unit, onError
 @Composable
 private fun AddPeopleDialog(
     currentMemberCount: Int,
-    onAddName: (String) -> Unit,
+    onAdd: (name: String, phone: String, email: String) -> Unit,
     onDismiss: () -> Unit
 ) {
     var name by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
     var addedCount by remember { mutableStateOf(0) }
     val remaining = MAX_MEMBERS - currentMemberCount - addedCount
+    val canAdd = name.isNotBlank() && (phone.isNotBlank() || email.isNotBlank()) && remaining > 0
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -520,7 +428,7 @@ private fun AddPeopleDialog(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     "Add travel companions by name — they don't need to install the app themselves. " +
-                        "Up to $MAX_MEMBERS people per trip.",
+                        "A phone number or email is required so the group can reach them. Up to $MAX_MEMBERS people per trip.",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 OutlinedTextField(
@@ -528,6 +436,24 @@ private fun AddPeopleDialog(
                     onValueChange = { name = it },
                     label = { Text("Name") },
                     singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = phone,
+                    onValueChange = { phone = it },
+                    label = { Text("Phone number") },
+                    placeholder = { Text("Optional if email is given") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = { Text("Email") },
+                    placeholder = { Text("Optional if phone is given") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
@@ -540,13 +466,15 @@ private fun AddPeopleDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    if (name.isNotBlank() && remaining > 0) {
-                        onAddName(name.trim())
+                    if (canAdd) {
+                        onAdd(name.trim(), phone.trim(), email.trim())
                         addedCount++
                         name = ""
+                        phone = ""
+                        email = ""
                     }
                 },
-                enabled = name.isNotBlank() && remaining > 0
+                enabled = canAdd
             ) { Text("Add") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Done") } }

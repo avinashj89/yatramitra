@@ -13,7 +13,7 @@ import com.avinash.yatramitra.model.RouteSuggestion
 import com.avinash.yatramitra.model.StopSource
 import com.avinash.yatramitra.model.SuggestionStatus
 import com.avinash.yatramitra.model.TripMeta
-import com.google.firebase.auth.FirebaseAuth
+import com.avinash.yatramitra.model.TripSummary
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
@@ -36,19 +36,10 @@ import kotlin.random.Random
  */
 object TripRepository {
 
-    private val auth by lazy { FirebaseAuth.getInstance() }
     private val db by lazy { FirebaseFirestore.getInstance() }
-
-    /** Signs in anonymously (once) so Firestore security rules can require request.auth != null. */
-    suspend fun ensureSignedIn() {
-        if (auth.currentUser == null) {
-            auth.signInAnonymously().await()
-        }
-    }
 
     /** Creates a brand-new trip with a short, easy-to-read join code, e.g. "7F3K9Q". */
     suspend fun createTrip(groupName: String = ""): String {
-        ensureSignedIn()
         val alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ" // no 0/O/1/I to avoid mix-ups
         var code: String? = null
         for (attempt in 1..6) {
@@ -76,31 +67,46 @@ object TripRepository {
 
     /** Returns true if a trip with this code exists. */
     suspend fun tripExists(code: String): Boolean {
-        ensureSignedIn()
         return db.collection("trips").document(code.uppercase()).get().await().exists()
     }
 
-    /** Adds a member with the given display name and returns their memberId. Used both for
-     *  someone joining themselves with the trip code, and for an existing member adding a
-     *  travel companion by name directly (e.g. someone who won't install the app). The trip's
-     *  creator joins as ORGANIZER; everyone else (code entry, or "Add people") joins as JOINER —
+    /** One-shot fetch of a trip's display name — used right after joining by code, before any
+     *  live listener is open, so the homepage's trip-index entry has a real name from the start. */
+    suspend fun getGroupName(code: String): String {
+        val doc = db.collection("trips").document(code.uppercase()).get().await()
+        return doc.getString("groupName") ?: "Our trip"
+    }
+
+    /** Adds a member with the given display name and returns their memberId. Used both for a
+     *  registered user joining themselves (passing their own [uid], so this trip shows up on
+     *  their homepage) and for an existing member adding a contact-only travel companion by name
+     *  (no [uid] — they never need an account or to install the app; [phone] or [email] identifies
+     *  them instead). The trip's creator joins as ORGANIZER; everyone else joins as GROUP_MEMBER —
      *  this is a UI convention only, not a Firestore security boundary (see [Member.role]). */
-    suspend fun joinTrip(code: String, name: String, role: MemberRole = MemberRole.JOINER): String {
-        ensureSignedIn()
+    suspend fun joinTrip(
+        code: String,
+        name: String,
+        role: MemberRole = MemberRole.JOINER,
+        phone: String = "",
+        email: String = "",
+        uid: String? = null
+    ): String {
         val ref = db.collection("trips").document(code.uppercase())
             .collection("members").document()
         ref.set(
             mapOf(
                 "name" to name,
                 "joinedAt" to System.currentTimeMillis(),
-                "role" to role.name
+                "role" to role.name,
+                "phone" to phone,
+                "email" to email,
+                "uid" to uid
             )
         ).await()
         return ref.id
     }
 
     suspend fun updateMemberUpiId(code: String, memberId: String, upiId: String) {
-        ensureSignedIn()
         db.collection("trips").document(code.uppercase())
             .collection("members").document(memberId)
             .update("upiId", upiId.trim())
@@ -118,6 +124,9 @@ object TripRepository {
                         name = it.getString("name") ?: "",
                         role = runCatching { MemberRole.valueOf(it.getString("role") ?: "") }
                             .getOrDefault(MemberRole.JOINER),
+                        phone = it.getString("phone") ?: "",
+                        email = it.getString("email") ?: "",
+                        uid = it.getString("uid"),
                         upiId = it.getString("upiId") ?: ""
                     )
                 } ?: emptyList()
@@ -146,7 +155,6 @@ object TripRepository {
     }
 
     suspend fun updateRoutePlan(code: String, plan: RoutePlan) {
-        ensureSignedIn()
         db.collection("trips").document(code.uppercase())
             .update("routePlan", routePlanToMap(plan))
             .await()
@@ -191,7 +199,6 @@ object TripRepository {
     }
 
     suspend fun saveItineraryDay(code: String, day: ItineraryDay) {
-        ensureSignedIn()
         val id = day.id.ifBlank { UUID.randomUUID().toString() }
         db.collection("trips").document(code.uppercase())
             .collection("itineraryDays").document(id)
@@ -200,7 +207,6 @@ object TripRepository {
     }
 
     suspend fun deleteItineraryDay(code: String, dayId: String) {
-        ensureSignedIn()
         db.collection("trips").document(code.uppercase())
             .collection("itineraryDays").document(dayId)
             .delete()
@@ -211,7 +217,6 @@ object TripRepository {
      *  current route plan and freshly-computed pitstops, while preserving any rows the Organizer
      *  added manually themselves — called when "Generate pitstops" is used on the Route tab. */
     suspend fun regenerateDay1FromRoute(code: String, plan: RoutePlan, pitstops: List<RouteRepository.Pitstop>) {
-        ensureSignedIn()
         val dayCollection = db.collection("trips").document(code.uppercase()).collection("itineraryDays")
         val existing = dayCollection.whereEqualTo("label", "Day 1").limit(1).get().await().documents.firstOrNull()
         val manualStops = existing?.let { docToItineraryDay(it) }?.stops?.filter { it.source == StopSource.MANUAL } ?: emptyList()
@@ -287,7 +292,6 @@ object TripRepository {
     )
 
     suspend fun updateGroupName(code: String, groupName: String) {
-        ensureSignedIn()
         db.collection("trips").document(code.uppercase())
             .update("groupName", groupName.ifBlank { "Our trip" })
             .await()
@@ -326,7 +330,6 @@ object TripRepository {
     }
 
     suspend fun addExpense(code: String, expense: Expense) {
-        ensureSignedIn()
         db.collection("trips").document(code.uppercase())
             .collection("expenses").document()
             .set(
@@ -346,7 +349,6 @@ object TripRepository {
     /** Overwrites an existing expense in place (used when editing), keeping its original id
      *  and creation time so it doesn't jump position in the live-ordered list. */
     suspend fun updateExpense(code: String, expense: Expense) {
-        ensureSignedIn()
         db.collection("trips").document(code.uppercase())
             .collection("expenses").document(expense.id)
             .set(
@@ -364,7 +366,6 @@ object TripRepository {
     }
 
     suspend fun deleteExpense(code: String, expenseId: String) {
-        ensureSignedIn()
         db.collection("trips").document(code.uppercase())
             .collection("expenses").document(expenseId)
             .delete().await()
@@ -373,7 +374,6 @@ object TripRepository {
     // ---- Route & itinerary suggestions (joiner -> organizer collaborative flow) ----
 
     suspend fun addRouteSuggestion(code: String, authorMemberId: String, authorName: String, text: String) {
-        ensureSignedIn()
         db.collection("trips").document(code.uppercase())
             .collection("routeSuggestions").document()
             .set(suggestionFields(authorMemberId, authorName, text))
@@ -386,7 +386,6 @@ object TripRepository {
         }
 
     suspend fun updateRouteSuggestionStatus(code: String, suggestionId: String, status: SuggestionStatus) {
-        ensureSignedIn()
         db.collection("trips").document(code.uppercase())
             .collection("routeSuggestions").document(suggestionId)
             .update("status", status.name)
@@ -394,7 +393,6 @@ object TripRepository {
     }
 
     suspend fun addItinerarySuggestion(code: String, authorMemberId: String, authorName: String, text: String) {
-        ensureSignedIn()
         db.collection("trips").document(code.uppercase())
             .collection("itinerarySuggestions").document()
             .set(suggestionFields(authorMemberId, authorName, text))
@@ -407,7 +405,6 @@ object TripRepository {
         }
 
     suspend fun updateItinerarySuggestionStatus(code: String, suggestionId: String, status: SuggestionStatus) {
-        ensureSignedIn()
         db.collection("trips").document(code.uppercase())
             .collection("itinerarySuggestions").document(suggestionId)
             .update("status", status.name)
@@ -443,6 +440,46 @@ object TripRepository {
                     )
                 } ?: emptyList()
                 trySend(items)
+            }
+        awaitClose { reg.remove() }
+    }
+
+    // ---- Per-user "my trips" index (homepage) ----
+
+    /** Upserts one entry in the signed-in user's own trip index — called whenever they create,
+     *  join, or reopen a trip, so the homepage's "recent trips" list stays current. */
+    suspend fun recordTripAccess(uid: String, tripCode: String, tripName: String, memberId: String, role: MemberRole) {
+        db.collection("users").document(uid)
+            .collection("trips").document(tripCode.uppercase())
+            .set(
+                mapOf(
+                    "tripCode" to tripCode.uppercase(),
+                    "tripName" to tripName,
+                    "memberId" to memberId,
+                    "role" to role.name,
+                    "lastAccessedAt" to System.currentTimeMillis()
+                )
+            ).await()
+    }
+
+    /** The signed-in user's 5 most recently accessed trips, newest first. */
+    fun observeMyTrips(uid: String): Flow<List<TripSummary>> = callbackFlow {
+        val reg = db.collection("users").document(uid)
+            .collection("trips")
+            .orderBy("lastAccessedAt", Query.Direction.DESCENDING)
+            .limit(5)
+            .addSnapshotListener { snap, _ ->
+                val trips = snap?.documents?.map { doc ->
+                    TripSummary(
+                        tripCode = doc.getString("tripCode") ?: doc.id,
+                        tripName = doc.getString("tripName") ?: "",
+                        memberId = doc.getString("memberId") ?: "",
+                        role = runCatching { MemberRole.valueOf(doc.getString("role") ?: "") }
+                            .getOrDefault(MemberRole.JOINER),
+                        lastAccessedAtMillis = doc.getLong("lastAccessedAt") ?: 0L
+                    )
+                } ?: emptyList()
+                trySend(trips)
             }
         awaitClose { reg.remove() }
     }

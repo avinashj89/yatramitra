@@ -1,13 +1,13 @@
 rules_version = '2';
 
 // Paste this into Firebase Console -> Firestore Database -> Rules.
-// It allows anyone signed in anonymously by the YatraMitra app (which happens automatically)
-// to read/write trip data *once they already know the trip code* — the code is what's supposed
-// to gate access, the same way a shared link would. "get" (fetch one specific trip you already
-// have the code for) is allowed, but "list" (browse every trip that exists) is explicitly denied,
-// so nobody can dump every trip in the database without ever knowing a code. Subcollection queries
-// for members/expenses are always scoped to one already-known tripCode by the request path itself,
-// so they stay listable without reopening that hole.
+// Everyone using the app now has a real account (email+password or phone/OTP), and trip data is
+// still gated by *knowing the trip code* — the same way a shared link would work — not by being a
+// specific account. "get" (fetch one specific trip you already have the code for) is allowed, but
+// "list" (browse every trip that exists) is explicitly denied, so nobody can dump every trip in
+// the database without ever knowing a code. Subcollection queries for members/expenses/etc. are
+// always scoped to one already-known tripCode by the request path itself, so they stay listable
+// without reopening that hole.
 service cloud.firestore {
   match /databases/{database}/documents {
     match /trips/{tripCode} {
@@ -34,6 +34,13 @@ service cloud.firestore {
       match /itinerarySuggestions/{suggestionId} {
         allow read, write: if request.auth != null;
       }
+    }
+
+    // Each signed-in user's own "recent trips" index for their homepage. Unlike trips/**, this
+    // *is* gated by account identity, not a shared code — nobody but you can read or write your
+    // own trip list.
+    match /users/{userId}/trips/{tripId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
   }
 }

@@ -69,6 +69,7 @@ fun TripPlannerScreen(
     session: LocalStore.Session,
     members: List<Member>,
     currentRole: MemberRole,
+    isReadOnly: Boolean,
     onError: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -129,6 +130,7 @@ fun TripPlannerScreen(
     if (!loaded) return
 
     val isOrganizer = currentRole == MemberRole.ORGANIZER
+    val canEdit = isOrganizer && !isReadOnly
     val currentMemberName = members.find { it.id == session.memberId }?.name ?: session.memberName
     val hasRoute = plan.from.isNotBlank() && plan.toStops.any { it.isNotBlank() }
 
@@ -141,7 +143,7 @@ fun TripPlannerScreen(
     ) {
         RouteScreenHeader(isOrganizer = isOrganizer, tripName = plan.tripName, travelerCount = members.size)
 
-        if (isOrganizer) {
+        if (canEdit) {
             OrganizerRouteForm(plan = plan, onPlanChange = ::updatePlan)
 
             HorizontalDivider()
@@ -202,7 +204,7 @@ fun TripPlannerScreen(
             onOpenMaps = { openInGoogleMaps(context, plan, routeInfo, computedPitstops) }
         )
 
-        if (isOrganizer) {
+        if (canEdit) {
             HorizontalDivider()
             TripMembersCard(
                 session = session,
@@ -216,6 +218,7 @@ fun TripPlannerScreen(
 
         RouteSuggestionsCard(
             isOrganizer = isOrganizer,
+            isReadOnly = isReadOnly,
             suggestions = suggestions,
             currentMemberId = session.memberId,
             suggestionText = suggestionText,
@@ -707,31 +710,67 @@ private fun TripMembersCard(
     }
 
     if (showAddPeople) {
+        var newPhone by remember { mutableStateOf("") }
+        var newEmail by remember { mutableStateOf("") }
+        val canAdd = newName.isNotBlank() && (newPhone.isNotBlank() || newEmail.isNotBlank())
         AlertDialog(
             onDismissRequest = { showAddPeople = false },
             title = { Text("Add a travel companion") },
             text = {
-                OutlinedTextField(
-                    value = newName,
-                    onValueChange = { newName = it },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "A phone number or email is required so the group can reach them.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text("Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = newPhone,
+                        onValueChange = { newPhone = it },
+                        label = { Text("Phone number") },
+                        placeholder = { Text("Optional if email is given") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = newEmail,
+                        onValueChange = { newEmail = it },
+                        label = { Text("Email") },
+                        placeholder = { Text("Optional if phone is given") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         val name = newName.trim()
-                        if (name.isNotBlank()) {
+                        if (canAdd) {
                             scope.launchSafely(onError, "Couldn't add that person — check your internet connection.") {
-                                TripRepository.joinTrip(session.tripCode, name, role = MemberRole.JOINER)
+                                TripRepository.joinTrip(
+                                    session.tripCode,
+                                    name,
+                                    role = MemberRole.JOINER,
+                                    phone = newPhone.trim(),
+                                    email = newEmail.trim()
+                                )
                             }
                         }
                         newName = ""
+                        newPhone = ""
+                        newEmail = ""
                         showAddPeople = false
                     },
-                    enabled = newName.isNotBlank()
+                    enabled = canAdd
                 ) { Text("Add") }
             },
             dismissButton = {
@@ -744,6 +783,7 @@ private fun TripMembersCard(
 @Composable
 private fun RouteSuggestionsCard(
     isOrganizer: Boolean,
+    isReadOnly: Boolean,
     suggestions: List<RouteSuggestion>,
     currentMemberId: String,
     suggestionText: String,
@@ -763,20 +803,22 @@ private fun RouteSuggestionsCard(
             )
         }
 
-        ElevatedCard {
-            Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = suggestionText,
-                    onValueChange = onSuggestionTextChange,
-                    placeholder = { Text("Suggest a route change or stop to discuss with the group…") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Button(onClick = onSubmit, enabled = suggestionText.isNotBlank()) {
-                        Icon(Icons.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (isOrganizer) "Post route note" else "Send suggestion")
+        if (!isReadOnly) {
+            ElevatedCard {
+                Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = suggestionText,
+                        onValueChange = onSuggestionTextChange,
+                        placeholder = { Text("Suggest a route change or stop to discuss with the group…") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        Button(onClick = onSubmit, enabled = suggestionText.isNotBlank()) {
+                            Icon(Icons.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (isOrganizer) "Post route note" else "Send suggestion")
+                        }
                     }
                 }
             }
@@ -814,7 +856,7 @@ private fun RouteSuggestionsCard(
                         )
                     }
                     Text(suggestion.text, style = MaterialTheme.typography.bodyMedium)
-                    if (isOrganizer && suggestion.status == SuggestionStatus.PENDING) {
+                    if (isOrganizer && !isReadOnly && suggestion.status == SuggestionStatus.PENDING) {
                         Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                             TextButton(onClick = { onDismiss(suggestion.id) }) {
                                 Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(16.dp))

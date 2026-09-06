@@ -22,12 +22,14 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.ListAlt
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -53,15 +55,17 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.avinash.yatramitra.data.AuthRepository
 import com.avinash.yatramitra.data.LocalStore
 import com.avinash.yatramitra.data.TripRepository
 import com.avinash.yatramitra.model.Member
 import com.avinash.yatramitra.model.MemberRole
 import com.avinash.yatramitra.ui.components.InitialsAvatar
 import com.avinash.yatramitra.ui.components.YatraMitraLogo
+import com.avinash.yatramitra.ui.screens.AuthScreen
 import com.avinash.yatramitra.ui.screens.ExpensesScreen
+import com.avinash.yatramitra.ui.screens.HomeScreen
 import com.avinash.yatramitra.ui.screens.ItineraryScreen
-import com.avinash.yatramitra.ui.screens.JoinTripScreen
 import com.avinash.yatramitra.ui.screens.TripPlannerScreen
 import com.avinash.yatramitra.ui.theme.Spacing
 import com.avinash.yatramitra.ui.theme.YatraMitraTheme
@@ -87,40 +91,54 @@ private val destinations = listOf(
     TopLevelDestination("expenses", "Expenses", Icons.Filled.AccountBalanceWallet)
 )
 
-/** Every tab is trip-scoped now (Organizer/Group Member roles, live sync), not just Expenses — so the
- *  whole app gates on having a trip session before showing the bottom-nav'd tabs at all. */
+/** Not signed in -> [AuthScreen]. Signed in, no trip open -> [HomeScreen]. Trip open -> the
+ *  3-tab [TripScaffold]. A trip opened from the homepage's recent-trips list is always read-only,
+ *  regardless of role — freshly creating or joining one opens it fully editable as before. */
 @Composable
 fun YatraMitraApp() {
-    val context = LocalContext.current
-    var session by remember { mutableStateOf<LocalStore.Session?>(null) }
-    var checked by remember { mutableStateOf(false) }
+    var authChecked by remember { mutableStateOf(false) }
+    var signedIn by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        session = LocalStore.loadSession(context)
-        checked = true
+        signedIn = AuthRepository.isSignedIn
+        authChecked = true
     }
 
-    if (!checked) return
+    if (!authChecked) return
 
-    val current = session
-    if (current == null) {
-        JoinTripScreen(onJoined = { code, memberId, name ->
-            LocalStore.saveSession(context, code, memberId, name)
-            session = LocalStore.Session(code, memberId, name)
+    if (!signedIn) {
+        AuthScreen(onAuthenticated = { signedIn = true })
+    } else {
+        SignedInApp(onSignedOut = {
+            AuthRepository.signOut()
+            signedIn = false
         })
+    }
+}
+
+private data class ActiveTrip(val session: LocalStore.Session, val isReadOnly: Boolean)
+
+@Composable
+private fun SignedInApp(onSignedOut: () -> Unit) {
+    var activeTrip by remember { mutableStateOf<ActiveTrip?>(null) }
+
+    val current = activeTrip
+    if (current == null) {
+        HomeScreen(
+            onOpenTrip = { session, readOnly -> activeTrip = ActiveTrip(session, readOnly) },
+            onSignOut = onSignedOut
+        )
     } else {
         TripScaffold(
-            session = current,
-            onLeaveTrip = {
-                LocalStore.clearSession(context)
-                session = null
-            }
+            session = current.session,
+            isReadOnly = current.isReadOnly,
+            onHome = { activeTrip = null }
         )
     }
 }
 
 @Composable
-private fun TripScaffold(session: LocalStore.Session, onLeaveTrip: () -> Unit) {
+private fun TripScaffold(session: LocalStore.Session, isReadOnly: Boolean, onHome: () -> Unit) {
     val context = LocalContext.current
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
@@ -141,6 +159,8 @@ private fun TripScaffold(session: LocalStore.Session, onLeaveTrip: () -> Unit) {
             TripTopBar(
                 role = currentRole,
                 memberName = session.memberName,
+                isReadOnly = isReadOnly,
+                onHome = onHome,
                 onInvite = {
                     val send = Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"
@@ -185,23 +205,41 @@ private fun TripScaffold(session: LocalStore.Session, onLeaveTrip: () -> Unit) {
             modifier = Modifier.padding(innerPadding)
         ) {
             composable("route-and-stops") {
-                TripPlannerScreen(session = session, members = members, currentRole = currentRole, onError = onError)
+                TripPlannerScreen(
+                    session = session,
+                    members = members,
+                    currentRole = currentRole,
+                    isReadOnly = isReadOnly,
+                    onError = onError
+                )
             }
             composable("itinerary") {
-                ItineraryScreen(session = session, members = members, currentRole = currentRole, onError = onError)
+                ItineraryScreen(
+                    session = session,
+                    members = members,
+                    currentRole = currentRole,
+                    isReadOnly = isReadOnly,
+                    onError = onError
+                )
             }
             composable("expenses") {
-                ExpensesScreen(session = session, onLeaveTrip = onLeaveTrip, onError = onError)
+                ExpensesScreen(session = session, isReadOnly = isReadOnly, onError = onError)
             }
         }
     }
 }
 
-/** Shown above every tab once inside a trip: brand, an Invite action, the current member's
- *  avatar, their role badge, and a live-sync indicator (Firestore already pushes updates to
- *  every open app — this is just a visual confirmation, not a separate mechanism). */
+/** Shown above every tab once inside a trip: brand, a non-destructive Home action, an Invite
+ *  action, the current member's avatar, their role badge (or a Read-only badge when browsing a
+ *  past trip from the homepage), and a live-sync indicator. */
 @Composable
-private fun TripTopBar(role: MemberRole, memberName: String, onInvite: () -> Unit) {
+private fun TripTopBar(
+    role: MemberRole,
+    memberName: String,
+    isReadOnly: Boolean,
+    onHome: () -> Unit,
+    onInvite: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -214,7 +252,12 @@ private fun TripTopBar(role: MemberRole, memberName: String, onInvite: () -> Uni
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            YatraMitraLogo(markSize = 32.dp, showTagline = false)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onHome) {
+                    Icon(Icons.Filled.Home, contentDescription = "Home")
+                }
+                YatraMitraLogo(markSize = 32.dp, showTagline = false)
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 AssistChip(
                     onClick = onInvite,
@@ -241,7 +284,15 @@ private fun TripTopBar(role: MemberRole, memberName: String, onInvite: () -> Uni
             AssistChip(
                 onClick = {},
                 enabled = false,
-                label = { Text(if (role == MemberRole.ORGANIZER) "Organizer View" else "Group Member View") }
+                label = {
+                    Text(
+                        when {
+                            isReadOnly -> "Read-only"
+                            role == MemberRole.ORGANIZER -> "Organizer View"
+                            else -> "Group Member View"
+                        }
+                    )
+                }
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(

@@ -55,11 +55,17 @@ data class PlaceSuggestion(
  *  security boundary. */
 enum class MemberRole { ORGANIZER, JOINER }
 
-/** A person on the shared trip (for expense splitting). */
+/** A person on the shared trip (for expense splitting). [uid] is set only when this member is a
+ *  registered YatraMitra account holder who joined themselves (so their trips show up on their own
+ *  homepage); it's null for a contact-only companion someone else added by name — they never need
+ *  to install the app or have an account. */
 data class Member(
     val id: String = "",
     val name: String = "",
     val role: MemberRole = MemberRole.JOINER,
+    val phone: String = "",
+    val email: String = "",
+    val uid: String? = null,
     /** Optional UPI VPA (e.g. "name@bank") this member added themselves, so others can pay them
      *  directly via a "Pay via UPI" deep link when settling up. Blank if not set. */
     val upiId: String = ""
@@ -125,4 +131,16 @@ data class ItinerarySuggestion(
     val text: String = "",
     val status: SuggestionStatus = SuggestionStatus.PENDING,
     val createdAtMillis: Long = 0L
+)
+
+/** One entry in a signed-in user's own "my trips" index (stored at `users/{uid}/trips/{tripCode}`),
+ *  so the homepage can list their recent trips without a broader, harder-to-secure query across
+ *  every trip in the database. [memberId] is that user's own member id within that trip, so opening
+ *  it from the homepage doesn't need a separate lookup. */
+data class TripSummary(
+    val tripCode: String = "",
+    val tripName: String = "",
+    val memberId: String = "",
+    val role: MemberRole = MemberRole.JOINER,
+    val lastAccessedAtMillis: Long = 0L
 )

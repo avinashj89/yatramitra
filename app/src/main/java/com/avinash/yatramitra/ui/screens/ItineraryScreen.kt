@@ -46,6 +46,7 @@ fun ItineraryScreen(
     session: LocalStore.Session,
     members: List<Member>,
     currentRole: MemberRole,
+    isReadOnly: Boolean,
     onError: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -79,6 +80,7 @@ fun ItineraryScreen(
     if (!loaded) return
 
     val isOrganizer = currentRole == MemberRole.ORGANIZER
+    val canEdit = isOrganizer && !isReadOnly
     val currentMemberName = members.find { it.id == session.memberId }?.name ?: session.memberName
     val sortedDays = days.sortedBy { it.order }
     val selectedDay = sortedDays.find { it.id == selectedDayId }
@@ -92,14 +94,14 @@ fun ItineraryScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         Column(Modifier.padding(20.dp, 20.dp, 20.dp, 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Itinerary", style = MaterialTheme.typography.titleLarge)
-            if (isOrganizer) {
+            if (canEdit) {
                 Text(
                     "Build your day-by-day plan: meetup points, meals, sightseeing stops — whatever you like.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
-                GroupMemberReadOnlyBanner()
+                GroupMemberReadOnlyBanner(isOrganizer = isOrganizer)
             }
         }
 
@@ -117,7 +119,7 @@ fun ItineraryScreen(
                     label = { Text(day.label) }
                 )
             }
-            if (isOrganizer) {
+            if (canEdit) {
                 AssistChip(
                     onClick = {
                         val newDay = ItineraryDay(
@@ -139,7 +141,7 @@ fun ItineraryScreen(
         if (selectedDay == null) {
             Box(modifier = Modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.TopCenter) {
                 Text(
-                    if (isOrganizer) "Tap \"Add day\" to start your itinerary." else "The Organizer hasn't added any days yet.",
+                    if (canEdit) "Tap \"Add day\" to start your itinerary." else "The Organizer hasn't added any days yet.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -153,7 +155,7 @@ fun ItineraryScreen(
                 item {
                     DayHeaderRow(
                         day = selectedDay,
-                        isOrganizer = isOrganizer,
+                        canEdit = canEdit,
                         onDelete = {
                             scope.launchSafely(onError, "Couldn't delete this day — check your internet connection.") {
                                 TripRepository.deleteItineraryDay(session.tripCode, selectedDay.id)
@@ -165,7 +167,7 @@ fun ItineraryScreen(
                 items(selectedDay.stops.sortedBy { it.order }, key = { it.id }) { stop ->
                     StopRow(
                         stop = stop,
-                        canEdit = isOrganizer,
+                        canEdit = canEdit,
                         onEdit = {
                             editingStop = stop
                             showStopDialog = true
@@ -176,7 +178,7 @@ fun ItineraryScreen(
                     )
                 }
 
-                if (isOrganizer) {
+                if (canEdit) {
                     item {
                         TextButton(onClick = {
                             editingStop = null
@@ -202,6 +204,7 @@ fun ItineraryScreen(
                 item {
                     ItinerarySuggestionsCard(
                         isOrganizer = isOrganizer,
+                        isReadOnly = isReadOnly,
                         suggestions = suggestions,
                         currentMemberId = session.memberId,
                         suggestionText = suggestionText,
@@ -250,7 +253,7 @@ fun ItineraryScreen(
 }
 
 @Composable
-private fun GroupMemberReadOnlyBanner() {
+private fun GroupMemberReadOnlyBanner(isOrganizer: Boolean) {
     Row(
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
@@ -267,12 +270,12 @@ private fun GroupMemberReadOnlyBanner() {
         )
         Column {
             Text(
-                "Role: Group Member (read-only)",
+                if (isOrganizer) "Read-only" else "Role: Group Member (read-only)",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold
             )
             Text(
-                "Only the Organizer can edit the itinerary. Suggest changes below.",
+                if (isOrganizer) "You're viewing this past trip in read-only mode." else "Only the Organizer can edit the itinerary. Suggest changes below.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -281,14 +284,14 @@ private fun GroupMemberReadOnlyBanner() {
 }
 
 @Composable
-private fun DayHeaderRow(day: ItineraryDay, isOrganizer: Boolean, onDelete: () -> Unit) {
+private fun DayHeaderRow(day: ItineraryDay, canEdit: Boolean, onDelete: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(day.label, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-        if (isOrganizer) {
+        if (canEdit) {
             IconButton(onClick = onDelete) {
                 Icon(Icons.Filled.Delete, contentDescription = "Delete day")
             }
@@ -355,6 +358,7 @@ private fun StopRow(stop: ItineraryStop, canEdit: Boolean, onEdit: () -> Unit, o
 @Composable
 private fun ItinerarySuggestionsCard(
     isOrganizer: Boolean,
+    isReadOnly: Boolean,
     suggestions: List<ItinerarySuggestion>,
     currentMemberId: String,
     suggestionText: String,
@@ -374,20 +378,22 @@ private fun ItinerarySuggestionsCard(
             )
         }
 
-        ElevatedCard {
-            Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = suggestionText,
-                    onValueChange = onSuggestionTextChange,
-                    placeholder = { Text("Suggest a timing or activity adjustment…") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Button(onClick = onSubmit, enabled = suggestionText.isNotBlank()) {
-                        Icon(Icons.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Submit suggestion")
+        if (!isReadOnly) {
+            ElevatedCard {
+                Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = suggestionText,
+                        onValueChange = onSuggestionTextChange,
+                        placeholder = { Text("Suggest a timing or activity adjustment…") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        Button(onClick = onSubmit, enabled = suggestionText.isNotBlank()) {
+                            Icon(Icons.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Submit suggestion")
+                        }
                     }
                 }
             }
@@ -425,7 +431,7 @@ private fun ItinerarySuggestionsCard(
                         )
                     }
                     Text(suggestion.text, style = MaterialTheme.typography.bodyMedium)
-                    if (isOrganizer && suggestion.status == SuggestionStatus.PENDING) {
+                    if (isOrganizer && !isReadOnly && suggestion.status == SuggestionStatus.PENDING) {
                         Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                             TextButton(onClick = { onDismiss(suggestion.id) }) {
                                 Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(16.dp))
