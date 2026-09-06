@@ -1,6 +1,7 @@
 package com.avinash.yatramitra.data
 
 import com.avinash.yatramitra.model.PlaceSuggestion
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -44,6 +45,8 @@ object PlacesRepository {
                     PlaceSuggestion(displayName, lat, lon)
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             emptyList()
         }
@@ -73,6 +76,8 @@ object PlacesRepository {
                 }
                 short ?: obj.optString("display_name").takeIf { it.isNotBlank() } ?: fallbackName(lat, lon)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             fallbackName(lat, lon)
         }
@@ -105,6 +110,8 @@ object PlacesRepository {
                 }
                 reverseGeocode(lat, lon)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             reverseGeocode(lat, lon)
         }

@@ -1,5 +1,6 @@
 package com.avinash.yatramitra.data
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -68,6 +69,8 @@ object RouteRepository {
                 }
                 RouteInfo(points, distance, duration, legDistances)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             null
         }
