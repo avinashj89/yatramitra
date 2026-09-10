@@ -37,17 +37,22 @@ object RouteRepository {
 
     private val client by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
             .build()
     }
 
-    /** Fetches the driving route through an ordered list of coordinates (at least 2 points). */
+    /** Fetches the driving route through an ordered list of coordinates (at least 2 points).
+     *  Requests "simplified" geometry rather than "full": for a long trip (a few hundred km),
+     *  full turn-by-turn geometry can be 100+ KB of coordinates, which is plenty to time out on a
+     *  real mobile connection — and we only ever use these points to place occasional pitstops
+     *  every 80-150 km apart, never to render every turn, so the simplified polyline is more than
+     *  accurate enough while being roughly two orders of magnitude smaller. */
     suspend fun fetchRoute(stops: List<RoutePoint>): RouteInfo? = withContext(Dispatchers.IO) {
         if (stops.size < 2) return@withContext null
         try {
             val coordsParam = stops.joinToString(";") { "${it.lon},${it.lat}" }
-            val url = "https://router.project-osrm.org/route/v1/driving/$coordsParam?overview=full&geometries=geojson"
+            val url = "https://router.project-osrm.org/route/v1/driving/$coordsParam?overview=simplified&geometries=geojson"
             val request = Request.Builder().url(url).header("User-Agent", "YatraMitra-PersonalTripApp/1.0").build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@withContext null
