@@ -85,7 +85,11 @@ dependencies {
 // future build from this pipeline -- register it once and it never needs to be redone.
 tasks.register("printDebugSha1") {
     doLast {
-        val keystoreFile = File("${System.getProperty("user.home")}/.android/debug.keystore")
+        val configuredPath = android.buildTypes.getByName("debug").signingConfig?.storeFile
+        val fallbackPath = File("${System.getProperty("user.home")}/.android/debug.keystore")
+        val keystoreFile = configuredPath ?: fallbackPath
+        println("Resolved debug signingConfig.storeFile: $configuredPath")
+        println("Fallback default path checked: ${fallbackPath.absolutePath} (exists=${fallbackPath.exists()})")
         if (!keystoreFile.exists()) {
             println("No debug keystore found at ${keystoreFile.absolutePath}")
             return@doLast
