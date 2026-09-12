@@ -75,3 +75,36 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
+
+// Prints the debug keystore's SHA-1/SHA-256 fingerprint to the build log. Firebase Phone
+// Authentication needs this fingerprint registered (Project Settings -> your Android app -> Add
+// fingerprint) before phone/OTP sign-in will work; email/password sign-in does not need it. Since
+// CI caches one fixed debug keystore across builds, this fingerprint stays the same for every
+// future build from this pipeline -- register it once and it never needs to be redone.
+tasks.register("printDebugSha1") {
+    doLast {
+        val keystoreFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+        if (!keystoreFile.exists()) {
+            println("No debug keystore found at ${keystoreFile.absolutePath}")
+            return@doLast
+        }
+        val output = java.io.ByteArrayOutputStream()
+        exec {
+            commandLine(
+                "keytool", "-list", "-v",
+                "-keystore", keystoreFile.absolutePath,
+                "-alias", "androiddebugkey",
+                "-storepass", "android",
+                "-keypass", "android"
+            )
+            standardOutput = output
+        }
+        println("===== DEBUG KEYSTORE FINGERPRINTS (for Firebase phone auth) =====")
+        println(output.toString())
+        println("===================================================================")
+    }
+}
+
+tasks.matching { it.name == "assembleDebug" }.configureEach {
+    finalizedBy("printDebugSha1")
+}
