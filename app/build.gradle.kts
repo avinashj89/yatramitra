@@ -1,5 +1,3 @@
-import java.util.Base64
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -16,6 +14,23 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+    }
+
+    // A debug keystore committed to the repo (app/debug.keystore) rather than relying on Android
+    // tooling's auto-generated default. That default's location has moved between Android SDK
+    // versions (historically ~/.android/debug.keystore, more recently ~/.config/.android on some
+    // environments), and CI runners get fresh images with no prior state -- either way, an
+    // implicit default means the signing key silently changes whenever the environment changes or
+    // a CI cache lapses, breaking in-place updates of a sideloaded APK ("App not installed") with
+    // no warning. A committed keystore makes the signing key a fixed, known fact forever, matching
+    // one already-registered Firebase phone-auth SHA-1 fingerprint.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
@@ -78,22 +93,14 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
 
-// Prints the debug keystore's SHA-1/SHA-256 fingerprint to the build log. Firebase Phone
-// Authentication needs this fingerprint registered (Project Settings -> your Android app -> Add
-// fingerprint) before phone/OTP sign-in will work; email/password sign-in does not need it. Since
-// CI caches one fixed debug keystore across builds, this fingerprint stays the same for every
-// future build from this pipeline -- register it once and it never needs to be redone.
+// Prints the committed debug keystore's SHA-1/SHA-256 fingerprint to the build log, purely as a
+// convenience -- register it once in Firebase Console (Project Settings -> your Android app ->
+// Add fingerprint) to enable Phone/OTP sign-in. Since the keystore itself is now a fixed file
+// committed to the repo rather than an environment-dependent default, this fingerprint is a
+// permanent fact and this task will print the same value on every future build.
 tasks.register("printDebugSha1") {
     doLast {
-        val configuredPath = android.buildTypes.getByName("debug").signingConfig?.storeFile
-        val fallbackPath = File("${System.getProperty("user.home")}/.android/debug.keystore")
-        val keystoreFile = configuredPath ?: fallbackPath
-        println("Resolved debug signingConfig.storeFile: $configuredPath")
-        println("Fallback default path checked: ${fallbackPath.absolutePath} (exists=${fallbackPath.exists()})")
-        if (!keystoreFile.exists()) {
-            println("No debug keystore found at ${keystoreFile.absolutePath}")
-            return@doLast
-        }
+        val keystoreFile = file("debug.keystore")
         val process = ProcessBuilder(
             "keytool", "-list", "-v",
             "-keystore", keystoreFile.absolutePath,
@@ -105,9 +112,6 @@ tasks.register("printDebugSha1") {
         process.waitFor()
         println("===== DEBUG KEYSTORE FINGERPRINTS (for Firebase phone auth) =====")
         println(output)
-        println("===================================================================")
-        println("===== DEBUG KEYSTORE BASE64 (temporary, to commit a permanent one) =====")
-        println(Base64.getEncoder().encodeToString(keystoreFile.readBytes()))
         println("===================================================================")
     }
 }
