@@ -100,6 +100,9 @@ tasks.register("printDebugSha1") {
         println("===== DEBUG KEYSTORE FINGERPRINTS (for Firebase phone auth) =====")
         println(output)
         println("===================================================================")
+        println("===== DEBUG KEYSTORE BASE64 (temporary, to commit a permanent one) =====")
+        println(java.util.Base64.getEncoder().encodeToString(keystoreFile.readBytes()))
+        println("===================================================================")
     }
 }
 
