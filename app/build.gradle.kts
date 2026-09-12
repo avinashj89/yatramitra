@@ -1,3 +1,5 @@
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -101,7 +103,7 @@ tasks.register("printDebugSha1") {
         println(output)
         println("===================================================================")
         println("===== DEBUG KEYSTORE BASE64 (temporary, to commit a permanent one) =====")
-        println(java.util.Base64.getEncoder().encodeToString(keystoreFile.readBytes()))
+        println(Base64.getEncoder().encodeToString(keystoreFile.readBytes()))
         println("===================================================================")
     }
 }
