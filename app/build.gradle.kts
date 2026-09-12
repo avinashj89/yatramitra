@@ -83,24 +83,22 @@ dependencies {
 // future build from this pipeline -- register it once and it never needs to be redone.
 tasks.register("printDebugSha1") {
     doLast {
-        val keystoreFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+        val keystoreFile = File("${System.getProperty("user.home")}/.android/debug.keystore")
         if (!keystoreFile.exists()) {
             println("No debug keystore found at ${keystoreFile.absolutePath}")
             return@doLast
         }
-        val output = java.io.ByteArrayOutputStream()
-        exec {
-            commandLine(
-                "keytool", "-list", "-v",
-                "-keystore", keystoreFile.absolutePath,
-                "-alias", "androiddebugkey",
-                "-storepass", "android",
-                "-keypass", "android"
-            )
-            standardOutput = output
-        }
+        val process = ProcessBuilder(
+            "keytool", "-list", "-v",
+            "-keystore", keystoreFile.absolutePath,
+            "-alias", "androiddebugkey",
+            "-storepass", "android",
+            "-keypass", "android"
+        ).redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().readText()
+        process.waitFor()
         println("===== DEBUG KEYSTORE FINGERPRINTS (for Firebase phone auth) =====")
-        println(output.toString())
+        println(output)
         println("===================================================================")
     }
 }
