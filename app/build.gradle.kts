@@ -100,6 +100,17 @@ dependencies {
 
     // JVM unit tests (app/src/test) -- pure-logic tests, no device/emulator needed.
     testImplementation("junit:junit:4.13.2")
+    // Runs a real local HTTP server so PlacesRepository/RouteRepository's OkHttp calls can be
+    // tested against scripted responses (success, malformed JSON, HTTP errors, no response at
+    // all) without touching the real network -- matches the OkHttp version already used above.
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    // org.json.* (used throughout PlacesRepository/RouteRepository) ships as part of Android's
+    // framework, and the stub android.jar used for JVM unit tests throws
+    // "RuntimeException: Method ... not mocked" for every one of its methods by default. This
+    // standalone artifact provides a real, working implementation on the unit-test classpath so
+    // JSON parsing actually executes instead of throwing on first use.
+    testImplementation("org.json:json:20231013")
 }
 
 // Prints the committed debug keystore's SHA-1/SHA-256 fingerprint to the build log, purely as a

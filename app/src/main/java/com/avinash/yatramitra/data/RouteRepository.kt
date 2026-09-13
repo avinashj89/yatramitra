@@ -35,6 +35,12 @@ object RouteRepository {
     /** A suggested pitstop: a place name plus how far into the route it falls. */
     data class Pitstop(val placeName: String, val distanceKm: Double, val elapsedMinutes: Double)
 
+    // Real production endpoint. Every function below takes this as an overridable parameter
+    // (defaulting to this constant) purely so unit tests can redirect calls to a local
+    // MockWebServer instead of the real network -- production call sites never pass anything but
+    // the default, so behavior is unchanged.
+    internal const val OSRM_BASE_URL = "https://router.project-osrm.org"
+
     private val client by lazy {
         OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
@@ -48,10 +54,10 @@ object RouteRepository {
      *  real mobile connection — and we only ever use these points to place occasional pitstops
      *  every 80-150 km apart, never to render every turn, so the simplified polyline is more than
      *  accurate enough while being roughly two orders of magnitude smaller. */
-    suspend fun fetchRoute(stops: List<RoutePoint>): RouteInfo? {
+    suspend fun fetchRoute(stops: List<RoutePoint>, baseUrl: String = OSRM_BASE_URL): RouteInfo? {
         if (stops.size < 2) return null
         return try {
-            fetchRouteOrThrow(stops)
+            fetchRouteOrThrow(stops, baseUrl)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -62,9 +68,9 @@ object RouteRepository {
     /** Like [fetchRoute], but throws with the real underlying reason (an HTTP status, OSRM's own
      *  error code, or the raw exception) instead of silently returning null — used by
      *  [suggestPitstops] so a failure can say exactly what happened instead of a generic guess. */
-    private suspend fun fetchRouteOrThrow(stops: List<RoutePoint>): RouteInfo = withContext(Dispatchers.IO) {
+    private suspend fun fetchRouteOrThrow(stops: List<RoutePoint>, baseUrl: String = OSRM_BASE_URL): RouteInfo = withContext(Dispatchers.IO) {
         val coordsParam = stops.joinToString(";") { "${it.lon},${it.lat}" }
-        val url = "https://router.project-osrm.org/route/v1/driving/$coordsParam?overview=simplified&geometries=geojson"
+        val url = "$baseUrl/route/v1/driving/$coordsParam?overview=simplified&geometries=geojson"
         val request = Request.Builder().url(url).header("User-Agent", "YatraMitra-PersonalTripApp/1.0").build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
@@ -139,6 +145,20 @@ object RouteRepository {
         return fetchRoute(points)
     }
 
+    /** Test-only entry point mirroring [suggestPitstops]'s network calls but exposing every base
+     *  URL, so a unit test can point every step (geocoding, routing, pitstop lookup) at a local
+     *  MockWebServer and exercise the exact same code path production traffic takes. */
+    internal suspend fun suggestPitstops(
+        orderedPlaceNames: List<String>,
+        breakEveryKm: Double?,
+        breakEveryHours: Double?,
+        nominatimBaseUrl: String,
+        osrmBaseUrl: String,
+        overpassBaseUrl: String
+    ): List<Pitstop> = suggestPitstopsInternal(
+        orderedPlaceNames, breakEveryKm, breakEveryHours, nominatimBaseUrl, osrmBaseUrl, overpassBaseUrl
+    )
+
     /** Thrown by [suggestPitstops] with a specific, user-facing reason for exactly which step
      *  failed — geocoding a particular place, fetching the route, an invalid break amount, or a
      *  route too short to need a break — instead of one generic "check your connection" message
@@ -158,8 +178,20 @@ object RouteRepository {
      */
     suspend fun suggestPitstops(
         orderedPlaceNames: List<String>,
-        breakEveryKm: Double? ,
+        breakEveryKm: Double?,
         breakEveryHours: Double?
+    ): List<Pitstop> = suggestPitstopsInternal(
+        orderedPlaceNames, breakEveryKm, breakEveryHours,
+        PlacesRepository.NOMINATIM_BASE_URL, OSRM_BASE_URL, PlacesRepository.OVERPASS_BASE_URL
+    )
+
+    private suspend fun suggestPitstopsInternal(
+        orderedPlaceNames: List<String>,
+        breakEveryKm: Double?,
+        breakEveryHours: Double?,
+        nominatimBaseUrl: String,
+        osrmBaseUrl: String,
+        overpassBaseUrl: String
     ): List<Pitstop> {
         val validNames = orderedPlaceNames.map { it.trim() }.filter { it.isNotBlank() }
         if (validNames.size < 2) {
@@ -167,7 +199,7 @@ object RouteRepository {
         }
 
         val geocoded = try {
-            validNames.map { name -> name to PlacesRepository.geocodeOrThrow(name) }
+            validNames.map { name -> name to PlacesRepository.geocodeOrThrow(name, nominatimBaseUrl) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -182,7 +214,7 @@ object RouteRepository {
 
         val points = geocoded.map { RoutePoint(it.second!!.lat, it.second!!.lon) }
         val route = try {
-            fetchRouteOrThrow(points)
+            fetchRouteOrThrow(points, osrmBaseUrl)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -210,7 +242,7 @@ object RouteRepository {
 
         val results = mutableListOf<Pitstop>()
         for ((point, km) in samples) {
-            val name = PlacesRepository.findNearbyPitstop(point.lat, point.lon)
+            val name = PlacesRepository.findNearbyPitstop(point.lat, point.lon, overpassBaseUrl, nominatimBaseUrl)
             val elapsedMinutes = if (totalKm > 0) (km / totalKm) * (route.durationSeconds / 60.0) else 0.0
             results.add(Pitstop(name, km, elapsedMinutes))
             delay(300) // be gentle on the free Overpass API between lookups
