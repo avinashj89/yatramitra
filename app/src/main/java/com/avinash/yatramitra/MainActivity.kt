@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,6 +62,7 @@ import com.avinash.yatramitra.data.TripRepository
 import com.avinash.yatramitra.model.Member
 import com.avinash.yatramitra.model.MemberRole
 import com.avinash.yatramitra.ui.components.InitialsAvatar
+import com.avinash.yatramitra.ui.components.ProfileSheet
 import com.avinash.yatramitra.ui.components.YatraMitraLogo
 import com.avinash.yatramitra.ui.screens.AuthScreen
 import com.avinash.yatramitra.ui.screens.ExpensesScreen
@@ -132,19 +134,26 @@ private fun SignedInApp(onSignedOut: () -> Unit) {
         TripScaffold(
             session = current.session,
             isReadOnly = current.isReadOnly,
-            onHome = { activeTrip = null }
+            onHome = { activeTrip = null },
+            onSignedOut = onSignedOut
         )
     }
 }
 
 @Composable
-private fun TripScaffold(session: LocalStore.Session, isReadOnly: Boolean, onHome: () -> Unit) {
+private fun TripScaffold(
+    session: LocalStore.Session,
+    isReadOnly: Boolean,
+    onHome: () -> Unit,
+    onSignedOut: () -> Unit
+) {
     val context = LocalContext.current
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     var members by remember { mutableStateOf<List<Member>>(emptyList()) }
     var groupName by remember { mutableStateOf("") }
+    var showProfile by remember { mutableStateOf(false) }
 
     LaunchedEffect(session.tripCode) {
         launch { TripRepository.observeMembers(session.tripCode).collect { members = it } }
@@ -161,6 +170,7 @@ private fun TripScaffold(session: LocalStore.Session, isReadOnly: Boolean, onHom
                 memberName = session.memberName,
                 isReadOnly = isReadOnly,
                 onHome = onHome,
+                onAvatarClick = { showProfile = true },
                 onInvite = {
                     val send = Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"
@@ -227,6 +237,16 @@ private fun TripScaffold(session: LocalStore.Session, isReadOnly: Boolean, onHom
             }
         }
     }
+
+    if (showProfile) {
+        ProfileSheet(
+            onDismiss = { showProfile = false },
+            onSignOut = {
+                showProfile = false
+                onSignedOut()
+            }
+        )
+    }
 }
 
 /** Shown above every tab once inside a trip: brand, a non-destructive Home action, an Invite
@@ -238,6 +258,7 @@ private fun TripTopBar(
     memberName: String,
     isReadOnly: Boolean,
     onHome: () -> Unit,
+    onAvatarClick: () -> Unit,
     onInvite: () -> Unit
 ) {
     Column(
@@ -272,7 +293,7 @@ private fun TripTopBar(
                     )
                 )
                 Spacer(Modifier.width(Spacing.xs))
-                InitialsAvatar(name = memberName, size = 32.dp)
+                InitialsAvatar(name = memberName, size = 32.dp, modifier = Modifier.clickable(onClick = onAvatarClick))
             }
         }
         Spacer(Modifier.height(Spacing.xs2))

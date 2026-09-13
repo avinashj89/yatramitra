@@ -7,7 +7,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,6 +19,8 @@ import com.avinash.yatramitra.data.LocalStore
 import com.avinash.yatramitra.data.TripRepository
 import com.avinash.yatramitra.model.MemberRole
 import com.avinash.yatramitra.model.TripSummary
+import com.avinash.yatramitra.ui.components.InitialsAvatar
+import com.avinash.yatramitra.ui.components.ProfileSheet
 import com.avinash.yatramitra.ui.components.YatraMitraLogo
 import com.avinash.yatramitra.ui.theme.Spacing
 import kotlinx.coroutines.launch
@@ -40,6 +41,7 @@ fun HomeScreen(
     var trips by remember { mutableStateOf<List<TripSummary>>(emptyList()) }
     var showNewTripDialog by remember { mutableStateOf(false) }
     var showJoinDialog by remember { mutableStateOf(false) }
+    var showProfile by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -71,11 +73,11 @@ fun HomeScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             YatraMitraLogo(markSize = 40.dp, showTagline = false)
-            TextButton(onClick = onSignOut) {
-                Icon(Icons.Filled.ExitToApp, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("Sign out")
-            }
+            InitialsAvatar(
+                name = myName,
+                size = 36.dp,
+                modifier = Modifier.clickable { showProfile = true }
+            )
         }
 
         Text("Hi, $myName", style = MaterialTheme.typography.headlineSmall)
@@ -233,6 +235,16 @@ fun HomeScreen(
                 ) { Text("Join") }
             },
             dismissButton = { TextButton(onClick = { showJoinDialog = false }) { Text("Cancel") } }
+        )
+    }
+
+    if (showProfile) {
+        ProfileSheet(
+            onDismiss = { showProfile = false },
+            onSignOut = {
+                showProfile = false
+                onSignOut()
+            }
         )
     }
 }

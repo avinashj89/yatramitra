@@ -22,16 +22,40 @@ object AuthRepository {
     val isSignedIn: Boolean get() = auth.currentUser != null
     val currentUserId: String? get() = auth.currentUser?.uid
     val currentUserName: String get() = auth.currentUser?.displayName?.takeIf { it.isNotBlank() } ?: "Traveler"
+    val currentUserEmail: String get() = auth.currentUser?.email.orEmpty()
+    val currentUserPhone: String get() = auth.currentUser?.phoneNumber.orEmpty()
+
+    /** True once the signed-in email account has clicked its verification link. Always true for
+     *  a phone account (phone sign-in is already OTP-verified) or when there's no user at all. */
+    val isEmailVerified: Boolean get() = auth.currentUser?.let { it.email == null || it.isEmailVerified } ?: true
 
     suspend fun signUpWithEmail(name: String, email: String, password: String) {
         val result = auth.createUserWithEmailAndPassword(email.trim(), password).await()
         result.user?.updateProfile(
             UserProfileChangeRequest.Builder().setDisplayName(name.trim()).build()
         )?.await()
+        result.user?.sendEmailVerification()?.await()
     }
 
     suspend fun signInWithEmail(email: String, password: String) {
         auth.signInWithEmailAndPassword(email.trim(), password).await()
+    }
+
+    /** Re-sends the verification link to the signed-in user's email. */
+    suspend fun sendVerificationEmail() {
+        auth.currentUser?.sendEmailVerification()?.await()
+    }
+
+    /** Refreshes the current user's data from Firebase and returns whether their email is now
+     *  verified — [FirebaseUser.isEmailVerified] is only as fresh as the last sign-in/reload, so
+     *  this must be called after the user claims to have clicked the emailed link. */
+    suspend fun reloadAndCheckVerified(): Boolean {
+        auth.currentUser?.reload()?.await()
+        return isEmailVerified
+    }
+
+    suspend fun sendPasswordReset(email: String) {
+        auth.sendPasswordResetEmail(email.trim()).await()
     }
 
     fun signOut() {

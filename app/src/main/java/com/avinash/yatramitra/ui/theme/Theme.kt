@@ -70,11 +70,11 @@ private val DarkColors = darkColorScheme(
     onBackground = DarkOnSurface,
     surface = DarkSurface,
     onSurface = DarkOnSurface,
-    surfaceVariant = SurfaceVariant,
-    onSurfaceVariant = OnSurfaceVariant,
+    surfaceVariant = DarkSurfaceVariant,
+    onSurfaceVariant = DarkOnSurfaceVariant,
     surfaceTint = InversePrimary,
     outline = Outline,
-    outlineVariant = OutlineVariant,
+    outlineVariant = DarkOutlineVariant,
     inverseSurface = SurfaceContainerLowest,
     inverseOnSurface = OnBackground
 )
