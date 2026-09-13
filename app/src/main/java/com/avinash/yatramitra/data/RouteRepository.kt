@@ -45,6 +45,10 @@ object RouteRepository {
         OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
+            // See TrustedHttpClients: this host's certificate chain roots at "ISRG Root X2",
+            // which pre-Android-14 devices don't trust by default -- without this, every one of
+            // them fails every request here with a persistent SSLHandshakeException.
+            .sslSocketFactory(TrustedHttpClients.sslSocketFactory, TrustedHttpClients.trustManager)
             .build()
     }
 

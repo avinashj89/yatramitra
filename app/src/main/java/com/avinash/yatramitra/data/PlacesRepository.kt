@@ -30,6 +30,11 @@ object PlacesRepository {
         OkHttpClient.Builder()
             .connectTimeout(8, TimeUnit.SECONDS)
             .readTimeout(8, TimeUnit.SECONDS)
+            // Overpass (OVERPASS_BASE_URL) shares OSRM's "ISRG Root X2"-rooted certificate chain,
+            // which pre-Android-14 devices don't trust by default -- see TrustedHttpClients.
+            // Nominatim's own chain is unaffected; this trust manager still falls back to the
+            // system default for it and everything else.
+            .sslSocketFactory(TrustedHttpClients.sslSocketFactory, TrustedHttpClients.trustManager)
             .build()
     }
 
