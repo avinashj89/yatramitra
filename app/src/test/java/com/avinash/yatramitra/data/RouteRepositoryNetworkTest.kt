@@ -55,15 +55,23 @@ class RouteRepositoryNetworkTest {
         "legs":[{"distance":150000.0}]}]}
     """.trimIndent()
 
+    // runTest's lambda must return Unit, so the pitstop list is captured into this var from
+    // inside the block rather than returned directly from runTest itself. If suggestPitstops
+    // throws, that exception propagates out of runTest (and this function) before result is ever
+    // assigned, so callers expecting an exception still see it correctly via try/catch.
     private fun runPipeline(
         names: List<String> = listOf("Bangalore", "Mysore"),
         breakEveryKm: Double? = 50.0,
         breakEveryHours: Double? = null
-    ) = runTest {
-        RouteRepository.suggestPitstops(
-            names, breakEveryKm, breakEveryHours,
-            nominatim.baseUrl(), osrm.baseUrl(), overpass.baseUrl()
-        )
+    ): List<RouteRepository.Pitstop> {
+        lateinit var result: List<RouteRepository.Pitstop>
+        runTest {
+            result = RouteRepository.suggestPitstops(
+                names, breakEveryKm, breakEveryHours,
+                nominatim.baseUrl(), osrm.baseUrl(), overpass.baseUrl()
+            )
+        }
+        return result
     }
 
     // ---- fetchRoute: the safe wrapper used by the passive Route Summary card ----
