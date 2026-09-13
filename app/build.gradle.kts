@@ -90,6 +90,12 @@ dependencies {
     // Plain HTTP client for the free OpenStreetMap-based place search / routing / pitstop lookups.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // ProviderInstaller (com.google.android.gms.security) -- patches a device's TLS/crypto
+    // provider at runtime via Play Services. Some Android devices carry an outdated security
+    // provider that fails the TLS handshake against certain modern servers ("Handshake failed")
+    // even though the server itself is fine; this is Google's documented fix.
+    implementation("com.google.android.gms:play-services-base:18.5.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // JVM unit tests (app/src/test) -- pure-logic tests, no device/emulator needed.

@@ -70,6 +70,7 @@ fun TripPlannerScreen(
     members: List<Member>,
     currentRole: MemberRole,
     isReadOnly: Boolean,
+    groupName: String,
     onError: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -141,7 +142,7 @@ fun TripPlannerScreen(
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-        RouteScreenHeader(isOrganizer = isOrganizer, tripName = plan.tripName, travelerCount = members.size)
+        RouteScreenHeader(isOrganizer = isOrganizer, tripName = groupName, travelerCount = members.size)
 
         if (canEdit) {
             OrganizerRouteForm(plan = plan, onPlanChange = ::updatePlan)
@@ -194,7 +195,7 @@ fun TripPlannerScreen(
                 pitstopMessage = pitstopMessage
             )
         } else {
-            ReadOnlyRouteCard(plan = plan)
+            ReadOnlyRouteCard(plan = plan, groupName = groupName)
         }
 
         HorizontalDivider()
@@ -276,15 +277,6 @@ private fun RouteScreenHeader(isOrganizer: Boolean, tripName: String, travelerCo
 @Composable
 private fun OrganizerRouteForm(plan: RoutePlan, onPlanChange: (RoutePlan) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        OutlinedTextField(
-            value = plan.tripName,
-            onValueChange = { onPlanChange(plan.copy(tripName = it)) },
-            label = { Text("Trip name") },
-            placeholder = { Text("e.g. Coorg long weekend") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-
         AutocompletePlaceField(
             label = "From",
             value = plan.from,
@@ -364,7 +356,7 @@ private fun OrganizerRouteForm(plan: RoutePlan, onPlanChange: (RoutePlan) -> Uni
 }
 
 @Composable
-private fun ReadOnlyRouteCard(plan: RoutePlan) {
+private fun ReadOnlyRouteCard(plan: RoutePlan, groupName: String) {
     val validStops = plan.toStops.map { it.trim() }.filter { it.isNotBlank() }
     ElevatedCard {
         Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
@@ -373,7 +365,7 @@ private fun ReadOnlyRouteCard(plan: RoutePlan) {
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(plan.tripName.ifBlank { "This trip's route" }, style = MaterialTheme.typography.titleMedium)
+                Text(groupName.ifBlank { "This trip's route" }, style = MaterialTheme.typography.titleMedium)
                 Icon(
                     Icons.Filled.Lock,
                     contentDescription = "Locked by the Organizer",

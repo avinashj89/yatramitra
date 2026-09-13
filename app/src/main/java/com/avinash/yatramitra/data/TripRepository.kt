@@ -13,6 +13,7 @@ import com.avinash.yatramitra.model.RouteSuggestion
 import com.avinash.yatramitra.model.StopSource
 import com.avinash.yatramitra.model.SuggestionStatus
 import com.avinash.yatramitra.model.TripMeta
+import com.avinash.yatramitra.model.TripStatus
 import com.avinash.yatramitra.model.TripSummary
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
@@ -77,6 +78,17 @@ object TripRepository {
         return doc.getString("groupName") ?: "Our trip"
     }
 
+    /** One-shot fetch of a trip's name and status together — used wherever the homepage's
+     *  per-user index entry needs a fresh snapshot (join by code, or reopening a trip) without
+     *  waiting on a live listener. */
+    suspend fun getTripMeta(code: String): TripMeta {
+        val doc = db.collection("trips").document(code.uppercase()).get().await()
+        return TripMeta(
+            groupName = doc.getString("groupName") ?: "Our trip",
+            status = runCatching { TripStatus.valueOf(doc.getString("status") ?: "") }.getOrDefault(TripStatus.ONGOING)
+        )
+    }
+
     /** Adds a member with the given display name and returns their memberId. Used both for a
      *  registered user joining themselves (passing their own [uid], so this trip shows up on
      *  their homepage) and for an existing member adding a contact-only travel companion by name
@@ -135,13 +147,53 @@ object TripRepository {
         awaitClose { reg.remove() }
     }
 
-    /** Live-observes the trip's own metadata document (currently just its group name). */
+    /** Live-observes the trip's own metadata document (group name, ongoing/completed status). */
     fun observeTripMeta(code: String): Flow<TripMeta> = callbackFlow {
         val reg = db.collection("trips").document(code.uppercase())
             .addSnapshotListener { snap, _ ->
-                trySend(TripMeta(groupName = snap?.getString("groupName") ?: ""))
+                trySend(
+                    TripMeta(
+                        groupName = snap?.getString("groupName") ?: "",
+                        status = runCatching { TripStatus.valueOf(snap?.getString("status") ?: "") }
+                            .getOrDefault(TripStatus.ONGOING)
+                    )
+                )
             }
         awaitClose { reg.remove() }
+    }
+
+    suspend fun updateTripStatus(code: String, status: TripStatus) {
+        db.collection("trips").document(code.uppercase())
+            .update("status", status.name)
+            .await()
+    }
+
+    /** Permanently deletes a trip and everything in it. Only cleans up the *caller's own*
+     *  `users/{uid}/trips/{code}` index entry — that collection's security rule is owner-write-only
+     *  (nobody can edit another user's index), so other members' entries are left as stale pointers
+     *  and are cleaned up lazily: see [observeMyTrips] callers, which should drop an entry whose
+     *  trip no longer exists when the user next tries to open it. */
+    suspend fun deleteTrip(code: String, myUid: String?) {
+        val upperCode = code.uppercase()
+        val tripRef = db.collection("trips").document(upperCode)
+        val subcollections = listOf("members", "expenses", "itineraryDays", "routeSuggestions", "itinerarySuggestions")
+        for (name in subcollections) {
+            val docs = tripRef.collection(name).get().await().documents
+            if (docs.isEmpty()) continue
+            val batch = db.batch()
+            docs.forEach { batch.delete(it.reference) }
+            batch.commit().await()
+        }
+        tripRef.delete().await()
+        if (myUid != null) {
+            db.collection("users").document(myUid).collection("trips").document(upperCode).delete().await()
+        }
+    }
+
+    /** Removes a stale entry from the given user's own trip index — used when a homepage trip
+     *  row points at a trip that no longer exists (e.g. someone else deleted it). */
+    suspend fun removeMyTripEntry(uid: String, tripCode: String) {
+        db.collection("users").document(uid).collection("trips").document(tripCode.uppercase()).delete().await()
     }
 
     /** Live-observes the trip's shared route plan (Route & Stops tab) — replaces the old
@@ -161,7 +213,6 @@ object TripRepository {
     }
 
     private fun routePlanToMap(plan: RoutePlan): Map<String, Any?> = mapOf(
-        "tripName" to plan.tripName,
         "from" to plan.from,
         "toStops" to plan.toStops,
         "roundTrip" to plan.roundTrip,
@@ -174,7 +225,6 @@ object TripRepository {
         if (map == null) return RoutePlan()
         val toStops = (map["toStops"] as? List<*>)?.filterIsInstance<String>()?.ifEmpty { listOf("") }
         return RoutePlan(
-            tripName = map["tripName"] as? String ?: "",
             from = map["from"] as? String ?: "",
             toStops = toStops ?: listOf(""),
             roundTrip = map["roundTrip"] as? Boolean ?: false,
@@ -447,8 +497,17 @@ object TripRepository {
     // ---- Per-user "my trips" index (homepage) ----
 
     /** Upserts one entry in the signed-in user's own trip index — called whenever they create,
-     *  join, or reopen a trip, so the homepage's "recent trips" list stays current. */
-    suspend fun recordTripAccess(uid: String, tripCode: String, tripName: String, memberId: String, role: MemberRole) {
+     *  join, or reopen a trip, so the homepage's "recent trips" list stays current. [status] is a
+     *  snapshot at the time of the call (refreshed whenever this runs); the authoritative,
+     *  live-updating status is [observeTripMeta] once a trip is actually open. */
+    suspend fun recordTripAccess(
+        uid: String,
+        tripCode: String,
+        tripName: String,
+        memberId: String,
+        role: MemberRole,
+        status: TripStatus = TripStatus.ONGOING
+    ) {
         db.collection("users").document(uid)
             .collection("trips").document(tripCode.uppercase())
             .set(
@@ -457,6 +516,7 @@ object TripRepository {
                     "tripName" to tripName,
                     "memberId" to memberId,
                     "role" to role.name,
+                    "status" to status.name,
                     "lastAccessedAt" to System.currentTimeMillis()
                 )
             ).await()
@@ -476,7 +536,9 @@ object TripRepository {
                         memberId = doc.getString("memberId") ?: "",
                         role = runCatching { MemberRole.valueOf(doc.getString("role") ?: "") }
                             .getOrDefault(MemberRole.JOINER),
-                        lastAccessedAtMillis = doc.getLong("lastAccessedAt") ?: 0L
+                        lastAccessedAtMillis = doc.getLong("lastAccessedAt") ?: 0L,
+                        status = runCatching { TripStatus.valueOf(doc.getString("status") ?: "") }
+                            .getOrDefault(TripStatus.ONGOING)
                     )
                 } ?: emptyList()
                 trySend(trips)

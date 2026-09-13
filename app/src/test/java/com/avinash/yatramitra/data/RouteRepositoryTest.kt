@@ -8,6 +8,21 @@ import org.junit.Test
 
 class RouteRepositoryTest {
 
+    // This is the exact mechanism a real user hit: OkHttp reports a TLS handshake failure as
+    // `javax.net.ssl.SSLHandshakeException: Handshake failed`, and suggestPitstops's catch block
+    // must surface that real message verbatim rather than a generic guess.
+    @Test
+    fun `describeFailure surfaces the real exception message for a TLS handshake failure`() {
+        val handshakeFailure = javax.net.ssl.SSLHandshakeException("Handshake failed")
+        assertEquals("Handshake failed", RouteRepository.describeFailure(handshakeFailure))
+    }
+
+    @Test
+    fun `describeFailure falls back to the exception's class name when there is no message`() {
+        val noMessage = java.io.IOException()
+        assertEquals("IOException", RouteRepository.describeFailure(noMessage))
+    }
+
     @Test
     fun `haversineKm is zero for the same point`() {
         val p = RoutePoint(12.9716, 77.5946)

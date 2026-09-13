@@ -27,9 +27,11 @@ data class ItineraryDay(
 enum class BreakUnit { KM, HOURS }
 enum class RoutePreference { FASTEST, SURPRISE }
 
-/** The From/To route-planning form. Supports up to 4 "To" stops, in order. */
+/** The From/To route-planning form. Supports up to 4 "To" stops, in order. The trip's display
+ *  name lives only on [TripMeta.groupName] (set once at creation) — this used to also carry its
+ *  own [tripName], which showed up as a second, always-blank "Trip name" field on the Route tab
+ *  that looked like the app had forgotten what was just typed on the homepage. */
 data class RoutePlan(
-    val tripName: String = "",
     val from: String = "",
     val toStops: List<String> = listOf(""), // 1 to 4 entries
     val roundTrip: Boolean = false,
@@ -104,9 +106,12 @@ data class Settlement(
     val amount: Double
 )
 
+enum class TripStatus { ONGOING, COMPLETED }
+
 /** Trip-level metadata that lives on the Firestore trip document itself (not a subcollection). */
 data class TripMeta(
-    val groupName: String = ""
+    val groupName: String = "",
+    val status: TripStatus = TripStatus.ONGOING
 )
 
 enum class SuggestionStatus { PENDING, ACCEPTED, DISMISSED }
@@ -142,5 +147,6 @@ data class TripSummary(
     val tripName: String = "",
     val memberId: String = "",
     val role: MemberRole = MemberRole.JOINER,
-    val lastAccessedAtMillis: Long = 0L
+    val lastAccessedAtMillis: Long = 0L,
+    val status: TripStatus = TripStatus.ONGOING
 )

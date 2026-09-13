@@ -145,6 +145,11 @@ object RouteRepository {
      *  that could mean any of those. */
     class PitstopUnavailableException(message: String) : Exception(message)
 
+    /** Turns a raw network/parsing exception into a short, human-readable fragment — e.g. "SSL
+     *  handshake failed" rather than a bare stack trace, but never a made-up guess, so a
+     *  [PitstopUnavailableException]'s message says exactly what actually happened. */
+    internal fun describeFailure(e: Exception): String = e.message ?: e.javaClass.simpleName
+
     /**
      * End-to-end pitstop suggestion: geocode the named stops, fetch the route, sample points
      * according to the break preference, and look up a real nearby place name for each sample.
@@ -167,7 +172,7 @@ object RouteRepository {
             throw e
         } catch (e: Exception) {
             throw PitstopUnavailableException(
-                "Couldn't reach the place-lookup service (${e.message ?: e.javaClass.simpleName}) — check your internet connection and try again."
+                "Couldn't reach the place-lookup service (${describeFailure(e)}) — check your internet connection and try again."
             )
         }
         val badName = geocoded.firstOrNull { it.second == null }?.first
@@ -182,7 +187,7 @@ object RouteRepository {
             throw e
         } catch (e: Exception) {
             throw PitstopUnavailableException(
-                "Couldn't calculate a route (${e.message ?: e.javaClass.simpleName}) — check your internet connection and try again."
+                "Couldn't calculate a route (${describeFailure(e)}) — check your internet connection and try again."
             )
         }
 
