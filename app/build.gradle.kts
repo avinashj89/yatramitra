@@ -91,6 +91,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // JVM unit tests (app/src/test) -- pure-logic tests, no device/emulator needed.
+    testImplementation("junit:junit:4.13.2")
 }
 
 // Prints the committed debug keystore's SHA-1/SHA-256 fingerprint to the build log, purely as a
@@ -118,4 +121,8 @@ tasks.register("printDebugSha1") {
 
 tasks.matching { it.name == "assembleDebug" }.configureEach {
     finalizedBy("printDebugSha1")
+    // Run the JVM unit test suite as part of the same `./gradlew assembleDebug` the CI workflow
+    // already runs, so a broken test fails the build (and blocks a broken APK from shipping)
+    // without needing a separate CI workflow step.
+    dependsOn("testDebugUnitTest")
 }

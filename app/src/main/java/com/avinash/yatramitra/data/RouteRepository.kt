@@ -48,33 +48,10 @@ object RouteRepository {
      *  real mobile connection — and we only ever use these points to place occasional pitstops
      *  every 80-150 km apart, never to render every turn, so the simplified polyline is more than
      *  accurate enough while being roughly two orders of magnitude smaller. */
-    suspend fun fetchRoute(stops: List<RoutePoint>): RouteInfo? = withContext(Dispatchers.IO) {
-        if (stops.size < 2) return@withContext null
-        try {
-            val coordsParam = stops.joinToString(";") { "${it.lon},${it.lat}" }
-            val url = "https://router.project-osrm.org/route/v1/driving/$coordsParam?overview=simplified&geometries=geojson"
-            val request = Request.Builder().url(url).header("User-Agent", "YatraMitra-PersonalTripApp/1.0").build()
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@withContext null
-                val body = response.body?.string() ?: return@withContext null
-                val obj = JSONObject(body)
-                if (obj.optString("code") != "Ok") return@withContext null
-                val route = obj.getJSONArray("routes").getJSONObject(0)
-                val distance = route.optDouble("distance", 0.0)
-                val duration = route.optDouble("duration", 0.0)
-                val coords = route.getJSONObject("geometry").getJSONArray("coordinates")
-                val points = (0 until coords.length()).map { i ->
-                    val pair = coords.getJSONArray(i)
-                    RoutePoint(lat = pair.getDouble(1), lon = pair.getDouble(0))
-                }
-                val legs = route.optJSONArray("legs")
-                val legDistances = if (legs != null) {
-                    (0 until legs.length()).map { legs.getJSONObject(it).optDouble("distance", 0.0) }
-                } else {
-                    emptyList()
-                }
-                RouteInfo(points, distance, duration, legDistances)
-            }
+    suspend fun fetchRoute(stops: List<RoutePoint>): RouteInfo? {
+        if (stops.size < 2) return null
+        return try {
+            fetchRouteOrThrow(stops)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -82,8 +59,43 @@ object RouteRepository {
         }
     }
 
+    /** Like [fetchRoute], but throws with the real underlying reason (an HTTP status, OSRM's own
+     *  error code, or the raw exception) instead of silently returning null — used by
+     *  [suggestPitstops] so a failure can say exactly what happened instead of a generic guess. */
+    private suspend fun fetchRouteOrThrow(stops: List<RoutePoint>): RouteInfo = withContext(Dispatchers.IO) {
+        val coordsParam = stops.joinToString(";") { "${it.lon},${it.lat}" }
+        val url = "https://router.project-osrm.org/route/v1/driving/$coordsParam?overview=simplified&geometries=geojson"
+        val request = Request.Builder().url(url).header("User-Agent", "YatraMitra-PersonalTripApp/1.0").build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw java.io.IOException("route service returned HTTP ${response.code}")
+            }
+            val body = response.body?.string()
+                ?: throw java.io.IOException("route service returned an empty response")
+            val obj = JSONObject(body)
+            if (obj.optString("code") != "Ok") {
+                throw java.io.IOException("route service said \"${obj.optString("code")}\"")
+            }
+            val route = obj.getJSONArray("routes").getJSONObject(0)
+            val distance = route.optDouble("distance", 0.0)
+            val duration = route.optDouble("duration", 0.0)
+            val coords = route.getJSONObject("geometry").getJSONArray("coordinates")
+            val points = (0 until coords.length()).map { i ->
+                val pair = coords.getJSONArray(i)
+                RoutePoint(lat = pair.getDouble(1), lon = pair.getDouble(0))
+            }
+            val legs = route.optJSONArray("legs")
+            val legDistances = if (legs != null) {
+                (0 until legs.length()).map { legs.getJSONObject(it).optDouble("distance", 0.0) }
+            } else {
+                emptyList()
+            }
+            RouteInfo(points, distance, duration, legDistances)
+        }
+    }
+
     /** Great-circle distance between two points, in kilometers. */
-    private fun haversineKm(a: RoutePoint, b: RoutePoint): Double {
+    internal fun haversineKm(a: RoutePoint, b: RoutePoint): Double {
         val r = 6371.0
         val dLat = Math.toRadians(b.lat - a.lat)
         val dLon = Math.toRadians(b.lon - a.lon)
@@ -97,7 +109,7 @@ object RouteRepository {
      * skipping the very start/end (those are already the named From/To stops). Capped at
      * [maxSamples] to be gentle on the free lookup services.
      */
-    private fun samplePoints(route: RouteInfo, intervalKm: Double, maxSamples: Int = 8): List<Pair<RoutePoint, Double>> {
+    internal fun samplePoints(route: RouteInfo, intervalKm: Double, maxSamples: Int = 8): List<Pair<RoutePoint, Double>> {
         if (intervalKm <= 0.0 || route.points.size < 2) return emptyList()
         val samples = mutableListOf<Pair<RoutePoint, Double>>() // point, cumulative km
         var cumulativeKm = 0.0
@@ -154,7 +166,9 @@ object RouteRepository {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            throw PitstopUnavailableException("Couldn't reach the place-lookup service — check your internet connection and try again.")
+            throw PitstopUnavailableException(
+                "Couldn't reach the place-lookup service (${e.message ?: e.javaClass.simpleName}) — check your internet connection and try again."
+            )
         }
         val badName = geocoded.firstOrNull { it.second == null }?.first
         if (badName != null) {
@@ -162,8 +176,15 @@ object RouteRepository {
         }
 
         val points = geocoded.map { RoutePoint(it.second!!.lat, it.second!!.lon) }
-        val route = fetchRoute(points)
-            ?: throw PitstopUnavailableException("Couldn't calculate a route between your stops — check your internet connection and try again.")
+        val route = try {
+            fetchRouteOrThrow(points)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw PitstopUnavailableException(
+                "Couldn't calculate a route (${e.message ?: e.javaClass.simpleName}) — check your internet connection and try again."
+            )
+        }
 
         val totalKm = route.distanceMeters / 1000.0
         val totalHours = route.durationSeconds / 3600.0
