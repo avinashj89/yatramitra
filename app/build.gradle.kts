@@ -143,3 +143,16 @@ tasks.matching { it.name == "assembleDebug" }.configureEach {
     // without needing a separate CI workflow step.
     dependsOn("testDebugUnitTest")
 }
+
+// Prints every individual test's PASS/FAIL/SKIP directly to the build log -- by default Gradle
+// only prints a one-line summary count, which isn't enough to report per-function results without
+// a separate CI artifact upload (blocked: this repo's access token lacks the `workflow` scope
+// needed to touch .github/workflows/*.yml).
+tasks.withType<Test> {
+    testLogging {
+        events("passed", "skipped", "failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showCauses = true
+        showStackTraces = true
+    }
+}
