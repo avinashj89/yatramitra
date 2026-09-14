@@ -374,7 +374,16 @@ fun ExpensesScreen(session: LocalStore.Session, isReadOnly: Boolean, onError: (S
             currentMemberCount = members.size,
             onAdd = { name, phone, email ->
                 scope.launchSafely(onError, "Couldn't add that person — check your internet connection.") {
-                    TripRepository.joinTrip(session.tripCode, name, role = MemberRole.JOINER, phone = phone, email = email)
+                    // If this phone/email belongs to a real registered account, link the member to
+                    // it and drop the trip into their own "recent trips" index -- there's no push
+                    // notification system in this app, so this is how they find out they were added.
+                    val match = TripRepository.findUserProfile(email, phone)
+                    val memberId = TripRepository.joinTrip(
+                        session.tripCode, name, role = MemberRole.JOINER, phone = phone, email = email, uid = match?.uid
+                    )
+                    if (match != null) {
+                        TripRepository.recordTripAccess(match.uid, session.tripCode, groupName, memberId, MemberRole.JOINER)
+                    }
                 }
             },
             onDismiss = { showAddPeople = false }

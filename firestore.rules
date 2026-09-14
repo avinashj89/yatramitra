@@ -42,5 +42,18 @@ service cloud.firestore {
     match /users/{userId}/trips/{tripId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
+
+    // Each signed-in user's own small discoverable profile (name/email/phone), written once per
+    // sign-in. "get" (fetch one you already know the id of) and "list" (query by email or phone)
+    // are both allowed to any signed-in user -- this is what lets "Add a travel companion" detect
+    // that a phone/email already belongs to a registered account and link the two, since there's
+    // no push-notification system in this app for any other way for them to find out they were
+    // added. This is a deliberate, minor tradeoff: any signed-in user can confirm a given email or
+    // phone number is registered and see its name, the same shape of tradeoff contacts-based
+    // matching apps generally accept. Writing your own profile is still owner-only.
+    match /users/{userId} {
+      allow get, list: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
   }
 }

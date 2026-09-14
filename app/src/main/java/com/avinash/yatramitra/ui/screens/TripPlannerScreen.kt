@@ -87,10 +87,6 @@ fun TripPlannerScreen(
     var pitstopMessage by remember { mutableStateOf<String?>(null) }
     var computedPitstops by remember { mutableStateOf<List<RouteRepository.Pitstop>>(emptyList()) }
 
-    var selectedPreferences by remember {
-        mutableStateOf(setOf("Temples & Spiritual", "Dhabas & Highway Food", "Heritage & Forts"))
-    }
-
     var suggestions by remember { mutableStateOf<List<RouteSuggestion>>(emptyList()) }
     var suggestionText by remember { mutableStateOf("") }
 
@@ -152,17 +148,9 @@ fun TripPlannerScreen(
             PitstopEngineCard(
                 plan = plan,
                 onPlanChange = ::updatePlan,
-                selectedPreferences = selectedPreferences,
-                onTogglePreference = { pref ->
-                    selectedPreferences = if (pref in selectedPreferences) {
-                        selectedPreferences - pref
-                    } else {
-                        selectedPreferences + pref
-                    }
-                },
                 computedPitstops = computedPitstops,
                 findingPitstops = findingPitstops,
-                enabled = hasRoute && plan.breakEvery.toDoubleOrNull() != null,
+                enabled = plan.pitstopsEnabled && hasRoute && plan.breakEvery.toDoubleOrNull() != null,
                 onGeneratePitstops = {
                     findingPitstops = true
                     pitstopMessage = null
@@ -179,7 +167,8 @@ fun TripPlannerScreen(
                             val pitstops = RouteRepository.suggestPitstops(
                                 orderedPlaceNames = orderedNames,
                                 breakEveryKm = if (plan.breakUnit == BreakUnit.KM) breakValue else null,
-                                breakEveryHours = if (plan.breakUnit == BreakUnit.HOURS) breakValue else null
+                                breakEveryHours = if (plan.breakUnit == BreakUnit.HOURS) breakValue else null,
+                                categories = plan.pitstopCategories
                             )
                             computedPitstops = pitstops
                             TripRepository.regenerateDay1FromRoute(session.tripCode, plan, pitstops)
@@ -212,6 +201,7 @@ fun TripPlannerScreen(
             TripMembersCard(
                 session = session,
                 members = members,
+                groupName = groupName,
                 scope = scope,
                 onError = onError
             )
@@ -397,8 +387,6 @@ private fun ReadOnlyRouteCard(plan: RoutePlan, groupName: String) {
 private fun PitstopEngineCard(
     plan: RoutePlan,
     onPlanChange: (RoutePlan) -> Unit,
-    selectedPreferences: Set<String>,
-    onTogglePreference: (String) -> Unit,
     computedPitstops: List<RouteRepository.Pitstop>,
     findingPitstops: Boolean,
     enabled: Boolean,
@@ -413,6 +401,29 @@ private fun PitstopEngineCard(
 
         ElevatedCard {
             Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                Row(
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Suggest pitstops for this trip", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "Turn off if your group doesn't want any breaks suggested along the route.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = plan.pitstopsEnabled,
+                        onCheckedChange = { onPlanChange(plan.copy(pitstopsEnabled = it)) }
+                    )
+                }
+
+                if (!plan.pitstopsEnabled) return@Column
+
+                HorizontalDivider()
+
                 Text(
                     "Break calculation mode",
                     style = MaterialTheme.typography.labelSmall,
@@ -463,7 +474,17 @@ private fun PitstopEngineCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                FlowRowPreferences(selectedPreferences = selectedPreferences, onToggle = onTogglePreference)
+                FlowRowPreferences(
+                    selectedPreferences = plan.pitstopCategories,
+                    onToggle = { pref ->
+                        val updated = if (pref in plan.pitstopCategories) {
+                            plan.pitstopCategories - pref
+                        } else {
+                            plan.pitstopCategories + pref
+                        }
+                        onPlanChange(plan.copy(pitstopCategories = updated))
+                    }
+                )
 
                 Text(
                     "Route preference",
@@ -636,6 +657,7 @@ private fun RouteSummaryCard(
 private fun TripMembersCard(
     session: LocalStore.Session,
     members: List<Member>,
+    groupName: String,
     scope: kotlinx.coroutines.CoroutineScope,
     onError: (String) -> Unit
 ) {
@@ -749,14 +771,25 @@ private fun TripMembersCard(
                     onClick = {
                         val name = newName.trim()
                         if (canAdd) {
+                            val trimmedPhone = newPhone.trim()
+                            val trimmedEmail = newEmail.trim()
                             scope.launchSafely(onError, "Couldn't add that person — check your internet connection.") {
-                                TripRepository.joinTrip(
+                                // If this phone/email belongs to a real registered account, link
+                                // the member to it and drop the trip into their own "recent trips"
+                                // index -- there's no push notification system in this app, so
+                                // this is how they actually find out they were added.
+                                val match = TripRepository.findUserProfile(trimmedEmail, trimmedPhone)
+                                val memberId = TripRepository.joinTrip(
                                     session.tripCode,
                                     name,
                                     role = MemberRole.JOINER,
-                                    phone = newPhone.trim(),
-                                    email = newEmail.trim()
+                                    phone = trimmedPhone,
+                                    email = trimmedEmail,
+                                    uid = match?.uid
                                 )
+                                if (match != null) {
+                                    TripRepository.recordTripAccess(match.uid, session.tripCode, groupName, memberId, MemberRole.JOINER)
+                                }
                             }
                         }
                         newName = ""

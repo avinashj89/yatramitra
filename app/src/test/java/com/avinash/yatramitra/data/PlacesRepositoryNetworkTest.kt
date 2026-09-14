@@ -163,4 +163,59 @@ class PlacesRepositoryNetworkTest {
             nominatim.shutdown()
         }
     }
+
+    // ---- findNearbyPitstop + "Group pitstop preferences": selecting a category must actually
+    // change the Overpass query sent -- previously the UI collected these selections but never
+    // passed them anywhere, so every choice produced the exact same request and the exact same
+    // results ("same pitstops no matter what I select"). These tests inspect the real request the
+    // server received, not just the (identical either way) canned response. ----
+
+    @Test
+    fun `findNearbyPitstop with Temples selected queries place_of_worship, not the generic default`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"elements":[]}"""))
+        PlacesRepository.findNearbyPitstop(
+            12.9, 77.5,
+            overpassBaseUrl = baseUrl(),
+            categories = setOf("Temples & Spiritual")
+        )
+        val recorded = server.takeRequest()
+        assertTrue("expected the place_of_worship filter, got: ${recorded.path}", recorded.path?.contains("place_of_worship") == true)
+        assertTrue("did not expect the generic default filter", recorded.path?.contains("fast_food") != true)
+    }
+
+    @Test
+    fun `findNearbyPitstop with Scenic Viewpoints selected sends a different query than Temples`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"elements":[]}"""))
+        PlacesRepository.findNearbyPitstop(
+            12.9, 77.5,
+            overpassBaseUrl = baseUrl(),
+            categories = setOf("Scenic Viewpoints")
+        )
+        val recorded = server.takeRequest()
+        assertTrue("expected the viewpoint filter, got: ${recorded.path}", recorded.path?.contains("viewpoint") == true)
+        assertTrue("did not expect the place_of_worship filter", recorded.path?.contains("place_of_worship") != true)
+    }
+
+    @Test
+    fun `findNearbyPitstop with no categories selected falls back to the original general filter`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"elements":[]}"""))
+        PlacesRepository.findNearbyPitstop(12.9, 77.5, overpassBaseUrl = baseUrl(), categories = emptySet())
+        val recorded = server.takeRequest()
+        assertTrue(recorded.path?.contains("restaurant") == true)
+        assertTrue(recorded.path?.contains("fast_food") == true)
+        assertTrue(recorded.path?.contains("fuel") == true)
+    }
+
+    @Test
+    fun `findNearbyPitstop with multiple categories selected queries all of them`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"elements":[]}"""))
+        PlacesRepository.findNearbyPitstop(
+            12.9, 77.5,
+            overpassBaseUrl = baseUrl(),
+            categories = setOf("EV Charging / Fuel", "Heritage & Forts")
+        )
+        val recorded = server.takeRequest()
+        assertTrue(recorded.path?.contains("charging_station") == true)
+        assertTrue(recorded.path?.contains("attraction") == true)
+    }
 }

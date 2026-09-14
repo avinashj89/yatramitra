@@ -1,6 +1,7 @@
 package com.avinash.yatramitra.data
 
 import com.avinash.yatramitra.model.BreakUnit
+import com.avinash.yatramitra.model.DEFAULT_PITSTOP_CATEGORIES
 import com.avinash.yatramitra.model.Expense
 import com.avinash.yatramitra.model.ItineraryDay
 import com.avinash.yatramitra.model.ItinerarySuggestion
@@ -15,9 +16,11 @@ import com.avinash.yatramitra.model.SuggestionStatus
 import com.avinash.yatramitra.model.TripMeta
 import com.avinash.yatramitra.model.TripStatus
 import com.avinash.yatramitra.model.TripSummary
+import com.avinash.yatramitra.model.UserProfile
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -218,12 +221,19 @@ object TripRepository {
         "roundTrip" to plan.roundTrip,
         "breakEvery" to plan.breakEvery,
         "breakUnit" to plan.breakUnit.name,
-        "routePreference" to plan.routePreference.name
+        "routePreference" to plan.routePreference.name,
+        "pitstopsEnabled" to plan.pitstopsEnabled,
+        "pitstopCategories" to plan.pitstopCategories.toList()
     )
 
     private fun mapToRoutePlan(map: Map<*, *>?): RoutePlan {
         if (map == null) return RoutePlan()
         val toStops = (map["toStops"] as? List<*>)?.filterIsInstance<String>()?.ifEmpty { listOf("") }
+        // Absent on a trip whose route plan was saved before this field existed -- default to the
+        // same "on, with a sensible starting set" behavior those trips already had.
+        val pitstopCategories = (map["pitstopCategories"] as? List<*>)
+            ?.filterIsInstance<String>()?.toSet()
+            ?: DEFAULT_PITSTOP_CATEGORIES
         return RoutePlan(
             from = map["from"] as? String ?: "",
             toStops = toStops ?: listOf(""),
@@ -232,7 +242,9 @@ object TripRepository {
             breakUnit = runCatching { BreakUnit.valueOf(map["breakUnit"] as? String ?: "") }
                 .getOrDefault(BreakUnit.HOURS),
             routePreference = runCatching { RoutePreference.valueOf(map["routePreference"] as? String ?: "") }
-                .getOrDefault(RoutePreference.FASTEST)
+                .getOrDefault(RoutePreference.FASTEST),
+            pitstopsEnabled = map["pitstopsEnabled"] as? Boolean ?: true,
+            pitstopCategories = pitstopCategories
         )
     }
 
@@ -521,6 +533,43 @@ object TripRepository {
                 )
             ).await()
     }
+
+    // ---- Registered-account lookup (for "Add a travel companion" -> account matching) ----
+
+    /** Upserts the signed-in user's own discoverable profile at `users/{uid}` — called once per
+     *  app open/sign-in (see MainActivity) so [findUserProfile] can later match someone being
+     *  added to a trip by phone/email against a real account, not just a name-only contact. Uses
+     *  merge so it never clobbers the `users/{uid}/trips` subcollection living under the same
+     *  document path. */
+    suspend fun upsertUserProfile(uid: String, name: String, email: String, phone: String) {
+        db.collection("users").document(uid)
+            .set(mapOf("name" to name, "email" to email, "phone" to phone), SetOptions.merge())
+            .await()
+    }
+
+    /** Looks up a registered account by email, then by phone (first match wins) — single-field
+     *  queries only, so no Firestore composite index is needed. Null if neither matches anyone,
+     *  which is the normal case for a travel companion who's never used the app. */
+    suspend fun findUserProfile(email: String, phone: String): UserProfile? {
+        val trimmedEmail = email.trim()
+        if (trimmedEmail.isNotBlank()) {
+            db.collection("users").whereEqualTo("email", trimmedEmail).limit(1).get().await()
+                .documents.firstOrNull()?.let { return docToUserProfile(it) }
+        }
+        val trimmedPhone = phone.trim()
+        if (trimmedPhone.isNotBlank()) {
+            db.collection("users").whereEqualTo("phone", trimmedPhone).limit(1).get().await()
+                .documents.firstOrNull()?.let { return docToUserProfile(it) }
+        }
+        return null
+    }
+
+    private fun docToUserProfile(doc: DocumentSnapshot): UserProfile = UserProfile(
+        uid = doc.id,
+        name = doc.getString("name") ?: "",
+        email = doc.getString("email") ?: "",
+        phone = doc.getString("phone") ?: ""
+    )
 
     /** The signed-in user's 5 most recently accessed trips, newest first. */
     fun observeMyTrips(uid: String): Flow<List<TripSummary>> = callbackFlow {

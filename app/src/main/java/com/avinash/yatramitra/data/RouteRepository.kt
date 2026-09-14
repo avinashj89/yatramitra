@@ -158,9 +158,10 @@ object RouteRepository {
         breakEveryHours: Double?,
         nominatimBaseUrl: String,
         osrmBaseUrl: String,
-        overpassBaseUrl: String
+        overpassBaseUrl: String,
+        categories: Set<String> = emptySet()
     ): List<Pitstop> = suggestPitstopsInternal(
-        orderedPlaceNames, breakEveryKm, breakEveryHours, nominatimBaseUrl, osrmBaseUrl, overpassBaseUrl
+        orderedPlaceNames, breakEveryKm, breakEveryHours, nominatimBaseUrl, osrmBaseUrl, overpassBaseUrl, categories
     )
 
     /** Thrown by [suggestPitstops] with a specific, user-facing reason for exactly which step
@@ -183,10 +184,11 @@ object RouteRepository {
     suspend fun suggestPitstops(
         orderedPlaceNames: List<String>,
         breakEveryKm: Double?,
-        breakEveryHours: Double?
+        breakEveryHours: Double?,
+        categories: Set<String> = emptySet()
     ): List<Pitstop> = suggestPitstopsInternal(
         orderedPlaceNames, breakEveryKm, breakEveryHours,
-        PlacesRepository.NOMINATIM_BASE_URL, OSRM_BASE_URL, PlacesRepository.OVERPASS_BASE_URL
+        PlacesRepository.NOMINATIM_BASE_URL, OSRM_BASE_URL, PlacesRepository.OVERPASS_BASE_URL, categories
     )
 
     private suspend fun suggestPitstopsInternal(
@@ -195,7 +197,8 @@ object RouteRepository {
         breakEveryHours: Double?,
         nominatimBaseUrl: String,
         osrmBaseUrl: String,
-        overpassBaseUrl: String
+        overpassBaseUrl: String,
+        categories: Set<String>
     ): List<Pitstop> {
         val validNames = orderedPlaceNames.map { it.trim() }.filter { it.isNotBlank() }
         if (validNames.size < 2) {
@@ -246,7 +249,7 @@ object RouteRepository {
 
         val results = mutableListOf<Pitstop>()
         for ((point, km) in samples) {
-            val name = PlacesRepository.findNearbyPitstop(point.lat, point.lon, overpassBaseUrl, nominatimBaseUrl)
+            val name = PlacesRepository.findNearbyPitstop(point.lat, point.lon, overpassBaseUrl, nominatimBaseUrl, categories)
             val elapsedMinutes = if (totalKm > 0) (km / totalKm) * (route.durationSeconds / 60.0) else 0.0
             results.add(Pitstop(name, km, elapsedMinutes))
             delay(300) // be gentle on the free Overpass API between lookups

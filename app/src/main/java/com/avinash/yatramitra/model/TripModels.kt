@@ -27,6 +27,10 @@ data class ItineraryDay(
 enum class BreakUnit { KM, HOURS }
 enum class RoutePreference { FASTEST, SURPRISE }
 
+/** The set of pitstop-category chips shown by default, before an Organizer has touched them — an
+ *  arbitrary but reasonable starting point, not a meaningful "recommended" set. */
+val DEFAULT_PITSTOP_CATEGORIES = setOf("Temples & Spiritual", "Dhabas & Highway Food", "Heritage & Forts")
+
 /** The From/To route-planning form. Supports up to 4 "To" stops, in order. The trip's display
  *  name lives only on [TripMeta.groupName] (set once at creation) — this used to also carry its
  *  own [tripName], which showed up as a second, always-blank "Trip name" field on the Route tab
@@ -37,7 +41,15 @@ data class RoutePlan(
     val roundTrip: Boolean = false,
     val breakEvery: String = "",       // free-typed number, kept as String for easy text-field binding
     val breakUnit: BreakUnit = BreakUnit.HOURS,
-    val routePreference: RoutePreference = RoutePreference.FASTEST
+    val routePreference: RoutePreference = RoutePreference.FASTEST,
+    /** Whether the group wants pitstops suggested at all — off is a first-class, easy choice, not
+     *  just "leave the break amount blank" (which used to just leave the Generate button stuck
+     *  disabled with no explanation). */
+    val pitstopsEnabled: Boolean = true,
+    /** Which kinds of places (temples, food, forts, fuel, viewpoints...) the pitstop search should
+     *  actually look for — previously collected in the UI but never sent anywhere, so changing
+     *  these had no effect on the generated stops. */
+    val pitstopCategories: Set<String> = DEFAULT_PITSTOP_CATEGORIES
 ) {
     companion object {
         const val MAX_TO_STOPS = 4
@@ -49,6 +61,18 @@ data class PlaceSuggestion(
     val displayName: String,
     val lat: Double,
     val lon: Double
+)
+
+/** A registered YatraMitra account's public-ish contact info, stored at `users/{uid}` (written
+ *  once per sign-in via [com.avinash.yatramitra.data.TripRepository.upsertUserProfile]) so that
+ *  adding a travel companion by phone/email can look them up: if they already have an account,
+ *  the trip is linked to them directly and shows up on their own homepage automatically, instead
+ *  of only ever being a name-only contact entry they'd never otherwise learn about. */
+data class UserProfile(
+    val uid: String = "",
+    val name: String = "",
+    val email: String = "",
+    val phone: String = ""
 )
 
 /** Whether a trip member created the trip (Organizer) or joined it (Group Member). This gates which

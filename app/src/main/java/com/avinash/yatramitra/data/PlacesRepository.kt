@@ -123,22 +123,45 @@ object PlacesRepository {
             }
         }
 
-    /** Looks for a nearby named amenity (food/fuel/rest spot) within ~3km using the free Overpass API.
-     *  Falls back to reverseGeocode (a nearby place name) when nothing suitable is found. */
+    /** Maps a "Group pitstop preferences" chip label (see TripPlannerScreen) to the Overpass
+     *  tag filter(s) that actually find that kind of place. Falling back to the old generic
+     *  restaurant/cafe/fast_food/fuel filter when a label isn't recognized or none are selected
+     *  keeps [findNearbyPitstop] from ever searching for literally nothing. */
+    private val CATEGORY_OVERPASS_FILTERS: Map<String, List<String>> = mapOf(
+        "Temples & Spiritual" to listOf("\"amenity\"=\"place_of_worship\""),
+        "Dhabas & Highway Food" to listOf("\"amenity\"~\"restaurant|cafe|fast_food\""),
+        "Heritage & Forts" to listOf("\"tourism\"=\"attraction\"", "\"historic\""),
+        "EV Charging / Fuel" to listOf("\"amenity\"~\"fuel|charging_station\""),
+        "Scenic Viewpoints" to listOf("\"tourism\"=\"viewpoint\"")
+    )
+    private val DEFAULT_OVERPASS_FILTER = "\"amenity\"~\"restaurant|cafe|fast_food|fuel\""
+
+    private fun buildPitstopQuery(lat: Double, lon: Double, categories: Set<String>): String {
+        val filters = categories.flatMap { CATEGORY_OVERPASS_FILTERS[it].orEmpty() }
+            .ifEmpty { listOf(DEFAULT_OVERPASS_FILTER) }
+        val nodeLines = filters.joinToString("\n") { filter -> "  node[$filter](around:3000,$lat,$lon);" }
+        return """
+            [out:json][timeout:10];
+            (
+            $nodeLines
+            );
+            out center 5;
+        """.trimIndent()
+    }
+
+    /** Looks for a nearby place matching one of [categories] (see [CATEGORY_OVERPASS_FILTERS])
+     *  within ~3km using the free Overpass API — an empty/unrecognized set searches the old
+     *  general restaurant/cafe/fast_food/fuel filter instead of finding nothing. Falls back to
+     *  reverseGeocode (a nearby place name) when nothing suitable is found. */
     suspend fun findNearbyPitstop(
         lat: Double,
         lon: Double,
         overpassBaseUrl: String = OVERPASS_BASE_URL,
-        nominatimBaseUrl: String = NOMINATIM_BASE_URL
+        nominatimBaseUrl: String = NOMINATIM_BASE_URL,
+        categories: Set<String> = emptySet()
     ): String = withContext(Dispatchers.IO) {
         try {
-            val query = """
-                [out:json][timeout:10];
-                (
-                  node["amenity"~"restaurant|cafe|fast_food|fuel"](around:3000,$lat,$lon);
-                );
-                out center 5;
-            """.trimIndent()
+            val query = buildPitstopQuery(lat, lon, categories)
             val encoded = URLEncoder.encode(query, "UTF-8")
             val url = "$overpassBaseUrl/api/interpreter?data=$encoded"
             val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()

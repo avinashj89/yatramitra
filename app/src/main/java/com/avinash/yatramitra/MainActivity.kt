@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -66,6 +67,8 @@ import com.google.android.gms.common.GooglePlayServicesRepairableException
 import com.google.android.gms.security.ProviderInstaller
 import com.avinash.yatramitra.data.AuthRepository
 import com.avinash.yatramitra.data.LocalStore
+import com.avinash.yatramitra.data.ThemeMode
+import com.avinash.yatramitra.data.ThemePreference
 import com.avinash.yatramitra.data.TripRepository
 import com.avinash.yatramitra.model.Member
 import com.avinash.yatramitra.model.MemberRole
@@ -87,6 +90,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        ThemePreference.init(applicationContext)
         // Some Android devices carry an outdated TLS/crypto provider that fails to negotiate a
         // handshake with certain modern servers ("Handshake failed") even though the server side
         // is fine. This patches the device's provider at runtime via Play Services -- Google's
@@ -104,7 +108,12 @@ class MainActivity : ComponentActivity() {
             }
         }.start()
         setContent {
-            YatraMitraTheme {
+            val darkTheme = when (ThemePreference.mode) {
+                ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+            }
+            YatraMitraTheme(darkTheme = darkTheme) {
                 YatraMitraApp()
             }
         }
@@ -130,6 +139,26 @@ fun YatraMitraApp() {
     LaunchedEffect(Unit) {
         signedIn = AuthRepository.isSignedIn
         authChecked = true
+    }
+
+    // Keeps users/{uid} current so "Add a travel companion" can match a real account by phone/
+    // email (see TripRepository.findUserProfile) -- runs on every sign-in, including an already
+    // signed-in cold start, so accounts created before this existed get backfilled too. Failure
+    // here is silently non-fatal: it only affects account-matching, never the ability to sign in.
+    LaunchedEffect(signedIn) {
+        if (signedIn) {
+            val uid = AuthRepository.currentUserId
+            if (uid != null) {
+                runCatching {
+                    TripRepository.upsertUserProfile(
+                        uid = uid,
+                        name = AuthRepository.currentUserName,
+                        email = AuthRepository.currentUserEmail,
+                        phone = AuthRepository.currentUserPhone
+                    )
+                }
+            }
+        }
     }
 
     if (!authChecked) return
