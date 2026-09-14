@@ -11,10 +11,10 @@
              YatraMitraTheme is the real source of truth for light/dark colors. Without this flag,
              on a device running system dark mode (API 29+) Android's "force dark" feature assumes
              an app with a Light-only theme hasn't opted into dark mode and forcibly inverts the
-             luminance of views it draws -- including the ComposeView -- which fights with
-             Compose's own correct theming and is what caused sign-in screen text to render
-             white-on-white/invisible. This opts the whole app out of that OS-level inversion so
-             only Compose's own (correct) theme colors are ever shown. -->
+             luminance of views it draws, including the ComposeView, which fights with Compose's
+             own correct theming and is what caused sign-in screen text to render white-on-white
+             and invisible. This opts the whole app out of that OS-level inversion so only
+             Compose's own (correct) theme colors are ever shown. -->
         <item name="android:forceDarkAllowed">false</item>
     </style>
 </resources>
