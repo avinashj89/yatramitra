@@ -172,7 +172,10 @@ fun TripPlannerScreen(
                             )
                             computedPitstops = pitstops
                             TripRepository.regenerateDay1FromRoute(session.tripCode, plan, pitstops)
-                            pitstopMessage = "Added ${pitstops.size} suggested stop${if (pitstops.size == 1) "" else "s"} to Day 1 of your Itinerary — edit them there any time."
+                            val intervalDescription = "every ${plan.breakEvery} ${if (plan.breakUnit == BreakUnit.KM) "km" else "hr"}"
+                            val categoriesDescription = plan.pitstopCategories.ifEmpty { setOf("general amenities") }.joinToString(", ")
+                            pitstopMessage = "Added ${pitstops.size} suggested stop${if (pitstops.size == 1) "" else "s"} to Day 1 of your Itinerary — edit them there any time." +
+                                "\nSearched $intervalDescription for: $categoriesDescription"
                         } catch (e: RouteRepository.PitstopUnavailableException) {
                             computedPitstops = emptyList()
                             pitstopMessage = e.message

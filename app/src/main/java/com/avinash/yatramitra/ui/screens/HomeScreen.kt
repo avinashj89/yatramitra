@@ -35,7 +35,9 @@ import java.util.Date
 @Composable
 fun HomeScreen(
     onOpenTrip: (session: LocalStore.Session, isReadOnly: Boolean) -> Unit,
-    onSignOut: () -> Unit
+    onSignOut: () -> Unit,
+    pendingJoinCode: String? = null,
+    onJoinCodeHandled: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     val uid = AuthRepository.currentUserId
@@ -44,6 +46,7 @@ fun HomeScreen(
     var trips by remember { mutableStateOf<List<TripSummary>>(emptyList()) }
     var showNewTripDialog by remember { mutableStateOf(false) }
     var showJoinDialog by remember { mutableStateOf(false) }
+    var joinCodeInput by remember { mutableStateOf("") }
     var showProfile by remember { mutableStateOf(false) }
     var menuForTrip by remember { mutableStateOf<String?>(null) } // tripCode whose overflow menu is open
     var tripPendingDelete by remember { mutableStateOf<TripSummary?>(null) }
@@ -53,6 +56,16 @@ fun HomeScreen(
     LaunchedEffect(uid) {
         if (uid != null) {
             TripRepository.observeMyTrips(uid).collect { trips = it }
+        }
+    }
+
+    // A yatramitra://join?code=XXXXXX tap (from the "Invite" share action) lands here instead of
+    // asking the user to type the code in by hand.
+    LaunchedEffect(pendingJoinCode) {
+        if (!pendingJoinCode.isNullOrBlank()) {
+            joinCodeInput = pendingJoinCode
+            showJoinDialog = true
+            onJoinCodeHandled()
         }
     }
 
@@ -267,14 +280,13 @@ fun HomeScreen(
     }
 
     if (showJoinDialog) {
-        var code by remember { mutableStateOf("") }
         AlertDialog(
-            onDismissRequest = { showJoinDialog = false },
+            onDismissRequest = { showJoinDialog = false; joinCodeInput = "" },
             title = { Text("Join a trip") },
             text = {
                 OutlinedTextField(
-                    value = code,
-                    onValueChange = { code = it.uppercase() },
+                    value = joinCodeInput,
+                    onValueChange = { joinCodeInput = it.uppercase() },
                     label = { Text("Trip code") },
                     placeholder = { Text("e.g. 7F3K9Q") },
                     singleLine = true,
@@ -284,9 +296,10 @@ fun HomeScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val trimmed = code.trim()
+                        val trimmed = joinCodeInput.trim()
                         if (trimmed.isBlank() || uid == null) return@TextButton
                         showJoinDialog = false
+                        joinCodeInput = ""
                         error = null
                         loading = true
                         scope.launch {
@@ -306,10 +319,10 @@ fun HomeScreen(
                             }
                         }
                     },
-                    enabled = code.isNotBlank()
+                    enabled = joinCodeInput.isNotBlank()
                 ) { Text("Join") }
             },
-            dismissButton = { TextButton(onClick = { showJoinDialog = false }) { Text("Cancel") } }
+            dismissButton = { TextButton(onClick = { showJoinDialog = false; joinCodeInput = "" }) { Text("Cancel") } }
         )
     }
 

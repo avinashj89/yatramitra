@@ -14,15 +14,32 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.avinash.yatramitra.data.AuthRepository
 import com.avinash.yatramitra.ui.components.YatraMitraLogo
+import com.avinash.yatramitra.ui.theme.YatraMitraTheme
 import kotlinx.coroutines.launch
 
 private enum class AuthMethod { EMAIL, PHONE }
 private enum class AuthMode { SIGN_IN, SIGN_UP }
 
 /** Real account sign-up/sign-in — email+password or phone/OTP. Shown before anything else in the
- *  app; [onAuthenticated] fires once Firebase confirms a session, and the homepage takes over. */
+ *  app; [onAuthenticated] fires once Firebase confirms a session, and the homepage takes over.
+ *
+ *  Always rendered in the light palette, deliberately ignoring both the system dark-mode setting
+ *  and the user's own Profile > Appearance choice: that toggle lives inside the Profile sheet,
+ *  which only opens *after* signing in, so it can never rescue this screen if something (an OEM
+ *  display "reading mode," a stubborn OS force-dark quirk) makes text here unreadable — the user
+ *  would be stuck looking at a broken screen with no way to reach the fix. A screen this early
+ *  and this critical is safer pinned to one known-good, tested appearance. */
 @Composable
 fun AuthScreen(onAuthenticated: () -> Unit) {
+    YatraMitraTheme(darkTheme = false) {
+        Surface(color = MaterialTheme.colorScheme.background) {
+            AuthScreenContent(onAuthenticated)
+        }
+    }
+}
+
+@Composable
+private fun AuthScreenContent(onAuthenticated: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 

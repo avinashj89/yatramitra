@@ -87,10 +87,17 @@ import com.avinash.yatramitra.ui.util.launchSafely
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    // Set from a yatramitra://join?code=XXXXXX deep link (see the second intent-filter in
+    // AndroidManifest.xml) -- read once by HomeScreen to pre-fill and auto-open its "Have a trip
+    // code?" dialog, then cleared via onJoinCodeHandled so it doesn't re-trigger on every
+    // recomposition or when navigating back to the homepage later in the same session.
+    private var pendingJoinCode by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         ThemePreference.init(applicationContext)
+        pendingJoinCode = joinCodeFrom(intent)
         // Some Android devices carry an outdated TLS/crypto provider that fails to negotiate a
         // handshake with certain modern servers ("Handshake failed") even though the server side
         // is fine. This patches the device's provider at runtime via Play Services -- Google's
@@ -114,9 +121,24 @@ class MainActivity : ComponentActivity() {
                 ThemeMode.DARK -> true
             }
             YatraMitraTheme(darkTheme = darkTheme) {
-                YatraMitraApp()
+                YatraMitraApp(
+                    pendingJoinCode = pendingJoinCode,
+                    onJoinCodeHandled = { pendingJoinCode = null }
+                )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        joinCodeFrom(intent)?.let { pendingJoinCode = it }
+    }
+
+    private fun joinCodeFrom(intent: Intent?): String? {
+        val data = intent?.data ?: return null
+        if (data.scheme != "yatramitra" || data.host != "join") return null
+        return data.getQueryParameter("code")?.trim()?.uppercase()?.takeIf { it.isNotBlank() }
     }
 }
 
@@ -132,7 +154,7 @@ private val destinations = listOf(
  *  3-tab [TripScaffold]. A trip opened from the homepage's recent-trips list is always read-only,
  *  regardless of role — freshly creating or joining one opens it fully editable as before. */
 @Composable
-fun YatraMitraApp() {
+fun YatraMitraApp(pendingJoinCode: String? = null, onJoinCodeHandled: () -> Unit = {}) {
     var authChecked by remember { mutableStateOf(false) }
     var signedIn by remember { mutableStateOf(false) }
 
@@ -166,24 +188,30 @@ fun YatraMitraApp() {
     if (!signedIn) {
         AuthScreen(onAuthenticated = { signedIn = true })
     } else {
-        SignedInApp(onSignedOut = {
-            AuthRepository.signOut()
-            signedIn = false
-        })
+        SignedInApp(
+            pendingJoinCode = pendingJoinCode,
+            onJoinCodeHandled = onJoinCodeHandled,
+            onSignedOut = {
+                AuthRepository.signOut()
+                signedIn = false
+            }
+        )
     }
 }
 
 private data class ActiveTrip(val session: LocalStore.Session, val isReadOnly: Boolean)
 
 @Composable
-private fun SignedInApp(onSignedOut: () -> Unit) {
+private fun SignedInApp(pendingJoinCode: String?, onJoinCodeHandled: () -> Unit, onSignedOut: () -> Unit) {
     var activeTrip by remember { mutableStateOf<ActiveTrip?>(null) }
 
     val current = activeTrip
     if (current == null) {
         HomeScreen(
             onOpenTrip = { session, readOnly -> activeTrip = ActiveTrip(session, readOnly) },
-            onSignOut = onSignedOut
+            onSignOut = onSignedOut,
+            pendingJoinCode = pendingJoinCode,
+            onJoinCodeHandled = onJoinCodeHandled
         )
     } else {
         TripScaffold(
@@ -250,7 +278,9 @@ private fun TripScaffold(
                         type = "text/plain"
                         putExtra(
                             Intent.EXTRA_TEXT,
-                            "Join our trip on YatraMitra! Enter this code in the app: ${session.tripCode}"
+                            "Join our trip on YatraMitra! If this shows up as a tappable link, use it to jump " +
+                                "straight in (needs the app already installed): yatramitra://join?code=${session.tripCode}\n" +
+                                "Otherwise, open the app and enter code: ${session.tripCode}"
                         )
                     }
                     context.startActivity(Intent.createChooser(send, "Share trip code"))
