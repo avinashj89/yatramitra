@@ -21,7 +21,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- yatramitra://join?code=XXXXXX -- lets the existing "Invite" share action hand
+            <!-- yatramitra://join?code=XXXXXX lets the existing "Invite" share action hand
                  someone a tappable link instead of a code they have to type in by hand. Only
                  works if the app is already installed (no App Links/custom domain set up), so
                  every invite message still states the plain code too. -->
