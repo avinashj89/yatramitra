@@ -20,8 +20,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.avinash.yatramitra.ui.theme.OnSurface
-import com.avinash.yatramitra.ui.theme.OnSurfaceVariant
 import kotlin.math.min
 
 private val MarkGradientColors = listOf(Color(0xFFFF6B35), Color(0xFFF97316), Color(0xFFE11D48))
@@ -73,7 +71,7 @@ fun YatraMitraLogo(
             Row {
                 Text(
                     "Yatra",
-                    color = OnSurface,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 18.sp,
                     style = MaterialTheme.typography.headlineSmall
@@ -89,7 +87,7 @@ fun YatraMitraLogo(
             if (showTagline) {
                 Text(
                     "SMART GROUP TRIP PLANNER",
-                    color = OnSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 8.sp,
                     letterSpacing = 1.sp,
