@@ -777,11 +777,13 @@ private fun TripMembersCard(
                             val trimmedPhone = newPhone.trim()
                             val trimmedEmail = newEmail.trim()
                             scope.launchSafely(onError, "Couldn't add that person — check your internet connection.") {
-                                // If this phone/email belongs to a real registered account, link
-                                // the member to it and drop the trip into their own "recent trips"
-                                // index -- there's no push notification system in this app, so
-                                // this is how they actually find out they were added.
-                                val match = TripRepository.findUserProfile(trimmedEmail, trimmedPhone)
+                                // Best-effort account match: if this lookup fails for any reason
+                                // (a rules hiccup, a transient error), adding the person below must
+                                // still go through exactly as it always did -- account matching is
+                                // a bonus on top of that, never a prerequisite for it. An earlier
+                                // version of this code ran the lookup first without this guard, so
+                                // any failure here silently blocked the add entirely.
+                                val match = runCatching { TripRepository.findUserProfile(trimmedEmail, trimmedPhone) }.getOrNull()
                                 val memberId = TripRepository.joinTrip(
                                     session.tripCode,
                                     name,
@@ -791,7 +793,9 @@ private fun TripMembersCard(
                                     uid = match?.uid
                                 )
                                 if (match != null) {
-                                    TripRepository.recordTripAccess(match.uid, session.tripCode, groupName, memberId, MemberRole.JOINER)
+                                    runCatching {
+                                        TripRepository.recordTripAccess(match.uid, session.tripCode, groupName, memberId, MemberRole.JOINER)
+                                    }
                                 }
                             }
                         }

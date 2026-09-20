@@ -30,8 +30,10 @@ import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
-/** Lands here after signing in whenever no trip is open. Lists your 5 most recent trips (opened
- *  read-only), and lets you start a new one or join an existing one by code. */
+/** Lands here after signing in whenever no trip is open. Lists your 5 most recent trips — the
+ *  Organizer reopens an ongoing one fully editable, same as right after creating it; everyone
+ *  else (or anyone once it's marked Completed) gets a read-only view — and lets you start a new
+ *  one or join an existing one by code. */
 @Composable
 fun HomeScreen(
     onOpenTrip: (session: LocalStore.Session, isReadOnly: Boolean) -> Unit,
@@ -45,6 +47,8 @@ fun HomeScreen(
 
     var trips by remember { mutableStateOf<List<TripSummary>>(emptyList()) }
     var showNewTripDialog by remember { mutableStateOf(false) }
+    var newTripNameInput by remember { mutableStateOf("") }
+    var duplicateNameConfirm by remember { mutableStateOf<String?>(null) }
     var showJoinDialog by remember { mutableStateOf(false) }
     var joinCodeInput by remember { mutableStateOf("") }
     var showProfile by remember { mutableStateOf(false) }
@@ -69,7 +73,7 @@ fun HomeScreen(
         }
     }
 
-    fun openExisting(summary: TripSummary, readOnly: Boolean) {
+    fun openExisting(summary: TripSummary) {
         scope.launch {
             if (uid == null) return@launch
             if (!TripRepository.tripExists(summary.tripCode)) {
@@ -80,8 +84,31 @@ fun HomeScreen(
                 error = "\"${summary.tripName.ifBlank { summary.tripCode }}\" was deleted and is no longer available."
                 return@launch
             }
-            TripRepository.recordTripAccess(uid, summary.tripCode, summary.tripName, summary.memberId, summary.role, summary.status)
+            // Re-fetch status fresh rather than trusting the (possibly stale) homepage index
+            // entry: this is exactly what decides whether the Organizer gets edit access back,
+            // so a status change made from another device must take effect immediately.
+            val meta = TripRepository.getTripMeta(summary.tripCode)
+            val readOnly = meta.status == TripStatus.COMPLETED || summary.role != MemberRole.ORGANIZER
+            TripRepository.recordTripAccess(uid, summary.tripCode, summary.tripName, summary.memberId, summary.role, meta.status)
             onOpenTrip(LocalStore.Session(summary.tripCode, summary.memberId, myName), readOnly)
+        }
+    }
+
+    fun createNewTrip(name: String) {
+        if (uid == null) return
+        error = null
+        loading = true
+        scope.launch {
+            try {
+                val code = TripRepository.createTrip(groupName = name)
+                val memberId = TripRepository.joinTrip(code, myName, role = MemberRole.ORGANIZER, uid = uid)
+                TripRepository.recordTripAccess(uid, code, name, memberId, MemberRole.ORGANIZER)
+                onOpenTrip(LocalStore.Session(code, memberId, myName), false)
+            } catch (e: Exception) {
+                error = "Couldn't create the trip — check your internet connection and try again."
+            } finally {
+                loading = false
+            }
         }
     }
 
@@ -168,7 +195,7 @@ fun HomeScreen(
                         .fillMaxWidth()
                         .clip(MaterialTheme.shapes.medium)
                         .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                        .clickable { openExisting(trip, readOnly = true) }
+                        .clickable { openExisting(trip) }
                         .padding(Spacing.sm),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -237,14 +264,13 @@ fun HomeScreen(
     }
 
     if (showNewTripDialog) {
-        var tripName by remember { mutableStateOf("") }
         AlertDialog(
-            onDismissRequest = { showNewTripDialog = false },
+            onDismissRequest = { showNewTripDialog = false; newTripNameInput = "" },
             title = { Text("Start a new trip") },
             text = {
                 OutlinedTextField(
-                    value = tripName,
-                    onValueChange = { tripName = it },
+                    value = newTripNameInput,
+                    onValueChange = { newTripNameInput = it },
                     label = { Text("Trip name") },
                     placeholder = { Text("e.g. Coorg long weekend") },
                     singleLine = true,
@@ -254,28 +280,46 @@ fun HomeScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val name = tripName.trim()
+                        val name = newTripNameInput.trim()
                         if (name.isBlank() || uid == null) return@TextButton
                         showNewTripDialog = false
-                        error = null
-                        loading = true
-                        scope.launch {
-                            try {
-                                val code = TripRepository.createTrip(groupName = name)
-                                val memberId = TripRepository.joinTrip(code, myName, role = MemberRole.ORGANIZER, uid = uid)
-                                TripRepository.recordTripAccess(uid, code, name, memberId, MemberRole.ORGANIZER)
-                                onOpenTrip(LocalStore.Session(code, memberId, myName), false)
-                            } catch (e: Exception) {
-                                error = "Couldn't create the trip — check your internet connection and try again."
-                            } finally {
-                                loading = false
-                            }
+                        // A duplicate name can't be checked against every trip that exists (the
+                        // security rules deliberately forbid listing the whole trips collection —
+                        // see firestore.rules), only against this organizer's own recent trips, so
+                        // this is a "did you mean to do that" nudge, not a hard uniqueness rule.
+                        if (trips.any { it.tripName.equals(name, ignoreCase = true) }) {
+                            duplicateNameConfirm = name
+                        } else {
+                            newTripNameInput = ""
+                            createNewTrip(name)
                         }
                     },
-                    enabled = tripName.isNotBlank()
+                    enabled = newTripNameInput.isNotBlank()
                 ) { Text("Create") }
             },
-            dismissButton = { TextButton(onClick = { showNewTripDialog = false }) { Text("Cancel") } }
+            dismissButton = { TextButton(onClick = { showNewTripDialog = false; newTripNameInput = "" }) { Text("Cancel") } }
+        )
+    }
+
+    duplicateNameConfirm?.let { name ->
+        AlertDialog(
+            onDismissRequest = { duplicateNameConfirm = null },
+            title = { Text("You already have a trip named this") },
+            text = {
+                Text("\"$name\" matches one of your recent trips. Create another one with the same name, or go back and rename it?")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        duplicateNameConfirm = null
+                        newTripNameInput = ""
+                        createNewTrip(name)
+                    }
+                ) { Text("Create anyway") }
+            },
+            dismissButton = {
+                TextButton(onClick = { duplicateNameConfirm = null; showNewTripDialog = true }) { Text("Go back") }
+            }
         )
     }
 
