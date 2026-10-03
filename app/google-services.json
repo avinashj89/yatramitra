@@ -12,7 +12,20 @@
           "package_name": "com.avinash.yatramitra"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "832877889905-n4hoftuh5t9n6ma1o6e83mi7aiaeutpf.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.avinash.yatramitra",
+            "certificate_hash": "7b1c1bb17865b23ac744b2af5c9f16d8ff59464c"
+          }
+        },
+        {
+          "client_id": "832877889905-r7upmfjeqq8g73238395t868ine0e6a8.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyB4Bj3m7r7Ml8RMw2o1mctHjVhLPJ2yIF4"
@@ -20,7 +33,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "832877889905-r7upmfjeqq8g73238395t868ine0e6a8.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

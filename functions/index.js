@@ -16,8 +16,8 @@ const { getFirestore } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const notify = require("./notify");
 
-// Must match the Firestore database location (checked when deploying).
-const REGION = "asia-south1";
+// Must match the Firestore database location: the (default) database is in asia-south2 (Delhi).
+const REGION = "asia-south2";
 
 setGlobalOptions({ region: REGION, maxInstances: 5 });
 initializeApp();
