@@ -7,6 +7,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,6 +46,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.avinash.yatramitra.data.LocalStore
 import com.avinash.yatramitra.data.PlacesRepository
+import com.avinash.yatramitra.data.RoutePlans
 import com.avinash.yatramitra.data.RouteRepository
 import com.avinash.yatramitra.data.TripRepository
 import com.avinash.yatramitra.data.TripRules
@@ -51,6 +54,7 @@ import com.avinash.yatramitra.model.BreakUnit
 import com.avinash.yatramitra.model.Member
 import com.avinash.yatramitra.model.MemberRole
 import com.avinash.yatramitra.model.PlaceSuggestion
+import com.avinash.yatramitra.model.RouteDay
 import com.avinash.yatramitra.model.RoutePlan
 import com.avinash.yatramitra.model.RoutePreference
 import com.avinash.yatramitra.model.RouteSuggestion
@@ -87,7 +91,11 @@ fun TripPlannerScreen(
 
     var findingPitstops by remember { mutableStateOf(false) }
     var pitstopMessage by remember { mutableStateOf<String?>(null) }
-    var computedPitstops by remember { mutableStateOf<List<RouteRepository.Pitstop>>(emptyList()) }
+    // Generated pitstops per route day (key = day index), shown under the engine and sent to Maps.
+    var computedPitstops by remember { mutableStateOf<Map<Int, List<RouteRepository.Pitstop>>>(emptyMap()) }
+
+    var selectedDayIndex by rememberSaveable { mutableStateOf(0) }
+    var dayPendingRemoval by remember { mutableStateOf<Int?>(null) }
 
     var suggestions by remember { mutableStateOf<List<RouteSuggestion>>(emptyList()) }
     var suggestionText by remember { mutableStateOf("") }
@@ -125,10 +133,14 @@ fun TripPlannerScreen(
         onDispose { latestUnsaved?.let { TripRepository.saveRoutePlanNow(session.tripCode, it) } }
     }
 
-    LaunchedEffect(plan.from, plan.toStops) {
-        val names = listOf(plan.from) + plan.toStops
-        val validCount = names.count { it.trim().isNotBlank() }
-        if (validCount < 2) {
+    // The day being viewed or edited (Day 1 = index 0); kept in range if a day is removed elsewhere.
+    val activeIndex = selectedDayIndex.coerceIn(0, (plan.days.size - 1).coerceAtLeast(0))
+    val activeDay = plan.days.getOrElse(activeIndex) { RouteDay() }
+    val dayNumber = activeIndex + 1
+
+    LaunchedEffect(activeDay.from, activeDay.toStops, activeDay.roundTrip) {
+        val names = RoutePlans.placesInOrder(activeDay)
+        if (names.size < 2) {
             routeInfo = null
         } else {
             delay(500) // debounce: wait for a pause before hitting the free geocode/route APIs
@@ -137,13 +149,63 @@ fun TripPlannerScreen(
             routeLoading = false
         }
     }
+    LaunchedEffect(activeIndex) { pitstopMessage = null }
 
     if (!loaded) return
 
     val isOrganizer = currentRole == MemberRole.ORGANIZER
     val canEdit = TripRules.canEditPlan(currentRole, if (isReadOnly) TripStatus.COMPLETED else TripStatus.ONGOING)
     val currentMemberName = members.find { it.id == session.memberId }?.name ?: session.memberName
-    val hasRoute = plan.from.isNotBlank() && plan.toStops.any { it.isNotBlank() }
+    val hasRoute = RoutePlans.hasRoute(activeDay)
+    val dayPitstops = computedPitstops[activeIndex].orEmpty()
+
+    /** Writes this day's route (and its pitstops, if any) into the matching Itinerary day. */
+    fun sendDayToItinerary(withPitstops: Boolean) {
+        val index = activeIndex
+        val day = activeDay
+        findingPitstops = true
+        pitstopMessage = null
+        scope.launchSafely(
+            onError = {
+                findingPitstops = false
+                onError(it)
+            },
+            errorMessage = if (withPitstops) {
+                "Couldn't generate pitstops — check your internet connection and try again."
+            } else {
+                "Couldn't update the Itinerary — check your internet connection and try again."
+            }
+        ) {
+            try {
+                val pitstops = if (withPitstops) {
+                    val breakValue = plan.breakEvery.toDoubleOrNull()
+                    RouteRepository.suggestPitstops(
+                        orderedPlaceNames = RoutePlans.placesInOrder(day),
+                        breakEveryKm = if (plan.breakUnit == BreakUnit.KM) breakValue else null,
+                        breakEveryHours = if (plan.breakUnit == BreakUnit.HOURS) breakValue else null,
+                        categories = plan.pitstopCategories
+                    )
+                } else {
+                    emptyList()
+                }
+                computedPitstops = computedPitstops + (index to pitstops)
+                TripRepository.regenerateItineraryDayFromRoute(session.tripCode, index, day, pitstops)
+                pitstopMessage = if (withPitstops) {
+                    val intervalDescription = "every ${plan.breakEvery} ${if (plan.breakUnit == BreakUnit.KM) "km" else "hr"}"
+                    val categoriesDescription = plan.pitstopCategories.ifEmpty { setOf("general amenities") }.joinToString(", ")
+                    "Added ${pitstops.size} suggested stop${if (pitstops.size == 1) "" else "s"} to Day ${index + 1} of your Itinerary — edit them there any time." +
+                        "\nSearched $intervalDescription for: $categoriesDescription"
+                } else {
+                    "Day ${index + 1}'s start and destination are now in the Itinerary."
+                }
+            } catch (e: RouteRepository.PitstopUnavailableException) {
+                computedPitstops = computedPitstops - index
+                pitstopMessage = e.message
+            } finally {
+                findingPitstops = false
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -154,63 +216,60 @@ fun TripPlannerScreen(
     ) {
         RouteScreenHeader(isOrganizer = isOrganizer, tripName = groupName, travelerCount = members.size)
 
+        RouteDaySelector(
+            days = plan.days,
+            selectedIndex = activeIndex,
+            canEdit = canEdit,
+            onSelect = { selectedDayIndex = it },
+            onAddDay = {
+                val newIndex = plan.days.size
+                updatePlan(RoutePlans.addDay(plan))
+                selectedDayIndex = newIndex
+            }
+        )
+
         if (canEdit) {
-            OrganizerRouteForm(plan = plan, onPlanChange = ::updatePlan)
+            OrganizerRouteForm(
+                dayNumber = dayNumber,
+                day = activeDay,
+                onDayChange = { updatePlan(RoutePlans.updateDay(plan, activeIndex, it)) },
+                canRemoveDay = plan.days.size > 1,
+                onRemoveDay = { dayPendingRemoval = activeIndex }
+            )
 
             HorizontalDivider()
 
             PitstopEngineCard(
                 plan = plan,
                 onPlanChange = ::updatePlan,
-                computedPitstops = computedPitstops,
+                dayNumber = dayNumber,
+                computedPitstops = dayPitstops,
                 findingPitstops = findingPitstops,
                 enabled = plan.pitstopsEnabled && hasRoute && plan.breakEvery.toDoubleOrNull() != null,
-                onGeneratePitstops = {
-                    findingPitstops = true
-                    pitstopMessage = null
-                    scope.launchSafely(
-                        onError = {
-                            findingPitstops = false
-                            onError(it)
-                        },
-                        errorMessage = "Couldn't generate pitstops — check your internet connection and try again."
-                    ) {
-                        val orderedNames = listOf(plan.from) + plan.toStops
-                        val breakValue = plan.breakEvery.toDoubleOrNull()
-                        try {
-                            val pitstops = RouteRepository.suggestPitstops(
-                                orderedPlaceNames = orderedNames,
-                                breakEveryKm = if (plan.breakUnit == BreakUnit.KM) breakValue else null,
-                                breakEveryHours = if (plan.breakUnit == BreakUnit.HOURS) breakValue else null,
-                                categories = plan.pitstopCategories
-                            )
-                            computedPitstops = pitstops
-                            TripRepository.regenerateDay1FromRoute(session.tripCode, plan, pitstops)
-                            val intervalDescription = "every ${plan.breakEvery} ${if (plan.breakUnit == BreakUnit.KM) "km" else "hr"}"
-                            val categoriesDescription = plan.pitstopCategories.ifEmpty { setOf("general amenities") }.joinToString(", ")
-                            pitstopMessage = "Added ${pitstops.size} suggested stop${if (pitstops.size == 1) "" else "s"} to Day 1 of your Itinerary — edit them there any time." +
-                                "\nSearched $intervalDescription for: $categoriesDescription"
-                        } catch (e: RouteRepository.PitstopUnavailableException) {
-                            computedPitstops = emptyList()
-                            pitstopMessage = e.message
-                        } finally {
-                            findingPitstops = false
-                        }
-                    }
-                },
+                hasRoute = hasRoute,
+                onGeneratePitstops = { sendDayToItinerary(withPitstops = true) },
+                onAddToItinerary = { sendDayToItinerary(withPitstops = false) },
                 pitstopMessage = pitstopMessage
             )
         } else {
-            ReadOnlyRouteCard(plan = plan, groupName = groupName, tripCompleted = isReadOnly)
+            ReadOnlyRouteCard(
+                day = activeDay,
+                dayNumber = dayNumber,
+                totalDays = plan.days.size,
+                groupName = groupName,
+                tripCompleted = isReadOnly
+            )
         }
 
         HorizontalDivider()
 
         RouteSummaryCard(
+            dayNumber = dayNumber,
+            totalDays = plan.days.size,
             loading = routeLoading,
             routeInfo = routeInfo,
             hasRoute = hasRoute,
-            onOpenMaps = { openInGoogleMaps(context, plan, routeInfo, computedPitstops) }
+            onOpenMaps = { openInGoogleMaps(context, activeDay, routeInfo, dayPitstops) }
         )
 
         if (canEdit) {
@@ -264,6 +323,69 @@ fun TripPlannerScreen(
 
         Spacer(Modifier.height(24.dp))
     }
+
+    dayPendingRemoval?.let { index ->
+        AlertDialog(
+            onDismissRequest = { dayPendingRemoval = null },
+            title = { Text("Remove Day ${index + 1}?") },
+            text = {
+                Text(
+                    "This removes Day ${index + 1}'s From and To places from the route. Later days move up " +
+                        "one. The Itinerary isn't changed.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    dayPendingRemoval = null
+                    updatePlan(RoutePlans.removeDay(plan, index))
+                    computedPitstops = emptyMap() // day numbers shifted, so these no longer line up
+                    selectedDayIndex = (index - 1).coerceAtLeast(0)
+                }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { dayPendingRemoval = null }) { Text("Cancel") } }
+        )
+    }
+}
+
+/** Day 1, Day 2, ... chips across the top of the Route tab, plus "Add day" for the Organizer. */
+@Composable
+private fun RouteDaySelector(
+    days: List<RouteDay>,
+    selectedIndex: Int,
+    canEdit: Boolean,
+    onSelect: (Int) -> Unit,
+    onAddDay: () -> Unit
+) {
+    if (days.size <= 1 && !canEdit) return
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            days.forEachIndexed { i, _ ->
+                FilterChip(
+                    selected = i == selectedIndex,
+                    onClick = { onSelect(i) },
+                    label = { Text("Day ${i + 1}") }
+                )
+            }
+            if (canEdit && days.size < RoutePlan.MAX_DAYS) {
+                AssistChip(
+                    onClick = onAddDay,
+                    leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    label = { Text("Add day") }
+                )
+            }
+        }
+        if (canEdit && days.size == 1) {
+            Text(
+                "Trip longer than a day? Tap \"Add day\" to plan each day's drive separately.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 }
 
 @Composable
@@ -290,41 +412,66 @@ private fun RouteScreenHeader(isOrganizer: Boolean, tripName: String, travelerCo
 }
 
 @Composable
-private fun OrganizerRouteForm(plan: RoutePlan, onPlanChange: (RoutePlan) -> Unit) {
+private fun OrganizerRouteForm(
+    dayNumber: Int,
+    day: RouteDay,
+    onDayChange: (RouteDay) -> Unit,
+    canRemoveDay: Boolean,
+    onRemoveDay: () -> Unit
+) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        AutocompletePlaceField(
-            label = "From",
-            value = plan.from,
-            onValueChange = { onPlanChange(plan.copy(from = it)) }
-        )
-
-        plan.toStops.forEachIndexed { index, stopValue ->
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                AutocompletePlaceField(
-                    label = if (plan.toStops.size == 1) "To" else "To ${index + 1}",
-                    value = stopValue,
-                    onValueChange = { new ->
-                        val updated = plan.toStops.toMutableList().also { it[index] = new }
-                        onPlanChange(plan.copy(toStops = updated))
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-                if (plan.toStops.size > 1) {
-                    IconButton(onClick = {
-                        val updated = plan.toStops.toMutableList().also { it.removeAt(index) }
-                        onPlanChange(plan.copy(toStops = updated))
-                    }) {
-                        Icon(Icons.Filled.Close, contentDescription = "Remove this stop")
-                    }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Day $dayNumber route", style = MaterialTheme.typography.titleMedium)
+            if (canRemoveDay) {
+                TextButton(onClick = onRemoveDay) {
+                    Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Remove Day $dayNumber")
                 }
-                if (index == plan.toStops.lastIndex && plan.toStops.size < RoutePlan.MAX_TO_STOPS) {
-                    IconButton(onClick = { onPlanChange(plan.copy(toStops = plan.toStops + "")) }) {
-                        Icon(Icons.Filled.Add, contentDescription = "Add another stop")
+            }
+        }
+
+        // key(dayNumber): each day gets its own fields, so switching days never shows the previous
+        // day's half-typed text or place suggestions.
+        key(dayNumber) {
+            AutocompletePlaceField(
+                label = "From",
+                value = day.from,
+                onValueChange = { onDayChange(day.copy(from = it)) }
+            )
+
+            day.toStops.forEachIndexed { index, stopValue ->
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    AutocompletePlaceField(
+                        label = if (day.toStops.size == 1) "To" else "To ${index + 1}",
+                        value = stopValue,
+                        onValueChange = { new ->
+                            val updated = day.toStops.toMutableList().also { it[index] = new }
+                            onDayChange(day.copy(toStops = updated))
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (day.toStops.size > 1) {
+                        IconButton(onClick = {
+                            val updated = day.toStops.toMutableList().also { it.removeAt(index) }
+                            onDayChange(day.copy(toStops = updated))
+                        }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Remove this stop")
+                        }
+                    }
+                    if (index == day.toStops.lastIndex && day.toStops.size < RoutePlan.MAX_TO_STOPS) {
+                        IconButton(onClick = { onDayChange(day.copy(toStops = day.toStops + "")) }) {
+                            Icon(Icons.Filled.Add, contentDescription = "Add another stop")
+                        }
                     }
                 }
             }
         }
-        if (plan.toStops.size >= RoutePlan.MAX_TO_STOPS) {
+        if (day.toStops.size >= RoutePlan.MAX_TO_STOPS) {
             Text(
                 "Up to ${RoutePlan.MAX_TO_STOPS} stops — that's the max for now.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -338,12 +485,12 @@ private fun OrganizerRouteForm(plan: RoutePlan, onPlanChange: (RoutePlan) -> Uni
                 .fillMaxWidth()
                 .clip(MaterialTheme.shapes.large)
                 .background(MaterialTheme.colorScheme.inverseSurface)
-                .clickable { onPlanChange(plan.copy(roundTrip = !plan.roundTrip)) }
+                .clickable { onDayChange(day.copy(roundTrip = !day.roundTrip)) }
                 .padding(Spacing.sm)
         ) {
             Checkbox(
-                checked = plan.roundTrip,
-                onCheckedChange = { onPlanChange(plan.copy(roundTrip = it)) },
+                checked = day.roundTrip,
+                onCheckedChange = { onDayChange(day.copy(roundTrip = it)) },
                 colors = CheckboxDefaults.colors(
                     checkedColor = MaterialTheme.colorScheme.tertiary,
                     uncheckedColor = MaterialTheme.colorScheme.inverseOnSurface
@@ -360,7 +507,7 @@ private fun OrganizerRouteForm(plan: RoutePlan, onPlanChange: (RoutePlan) -> Uni
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        "Round trip (return to starting point)",
+                        "Round trip (end Day $dayNumber back at its starting point)",
                         color = MaterialTheme.colorScheme.inverseOnSurface,
                         fontWeight = FontWeight.Bold
                     )
@@ -371,8 +518,8 @@ private fun OrganizerRouteForm(plan: RoutePlan, onPlanChange: (RoutePlan) -> Uni
 }
 
 @Composable
-private fun ReadOnlyRouteCard(plan: RoutePlan, groupName: String, tripCompleted: Boolean) {
-    val validStops = plan.toStops.map { it.trim() }.filter { it.isNotBlank() }
+private fun ReadOnlyRouteCard(day: RouteDay, dayNumber: Int, totalDays: Int, groupName: String, tripCompleted: Boolean) {
+    val validStops = day.toStops.map { it.trim() }.filter { it.isNotBlank() }
     ElevatedCard {
         Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             Row(
@@ -380,7 +527,10 @@ private fun ReadOnlyRouteCard(plan: RoutePlan, groupName: String, tripCompleted:
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(groupName.ifBlank { "This trip's route" }, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (totalDays > 1) "Day $dayNumber of $totalDays" else groupName.ifBlank { "This trip's route" },
+                    style = MaterialTheme.typography.titleMedium
+                )
                 Icon(
                     Icons.Filled.Lock,
                     contentDescription = "Locked by the Organizer",
@@ -397,11 +547,11 @@ private fun ReadOnlyRouteCard(plan: RoutePlan, groupName: String, tripCompleted:
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Text("From: ${plan.from.ifBlank { "Not set yet" }}", style = MaterialTheme.typography.bodyLarge)
+            Text("From: ${day.from.ifBlank { "Not set yet" }}", style = MaterialTheme.typography.bodyLarge)
             validStops.forEachIndexed { i, stop ->
                 Text("Stop ${i + 1}: $stop", style = MaterialTheme.typography.bodyMedium)
             }
-            if (plan.roundTrip) {
+            if (day.roundTrip) {
                 Text(
                     "Round trip — returns to the starting point",
                     style = MaterialTheme.typography.bodySmall,
@@ -416,10 +566,13 @@ private fun ReadOnlyRouteCard(plan: RoutePlan, groupName: String, tripCompleted:
 private fun PitstopEngineCard(
     plan: RoutePlan,
     onPlanChange: (RoutePlan) -> Unit,
+    dayNumber: Int,
     computedPitstops: List<RouteRepository.Pitstop>,
     findingPitstops: Boolean,
     enabled: Boolean,
+    hasRoute: Boolean,
     onGeneratePitstops: () -> Unit,
+    onAddToItinerary: () -> Unit,
     pitstopMessage: String?
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -449,7 +602,18 @@ private fun PitstopEngineCard(
                     )
                 }
 
-                if (!plan.pitstopsEnabled) return@Column
+                if (!plan.pitstopsEnabled) {
+                    // Without pitstops there was no way to get the route into the Itinerary at all.
+                    OutlinedButton(
+                        onClick = onAddToItinerary,
+                        enabled = hasRoute && !findingPitstops,
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) { Text("Add Day $dayNumber route to Itinerary") }
+                    pitstopMessage?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                    return@Column
+                }
 
                 HorizontalDivider()
 
@@ -543,7 +707,7 @@ private fun PitstopEngineCard(
                         Spacer(Modifier.width(8.dp))
                         Text("Finding pitstops…")
                     } else {
-                        Text("Generate pitstops for Itinerary")
+                        Text("Generate Day $dayNumber pitstops for Itinerary")
                     }
                 }
                 pitstopMessage?.let {
@@ -625,6 +789,8 @@ private fun FlowRowPreferences(selectedPreferences: Set<String>, onToggle: (Stri
 
 @Composable
 private fun RouteSummaryCard(
+    dayNumber: Int,
+    totalDays: Int,
     loading: Boolean,
     routeInfo: RouteRepository.RouteInfo?,
     hasRoute: Boolean,
@@ -634,7 +800,10 @@ private fun RouteSummaryCard(
         Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Filled.Explore, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Text("Route summary", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (totalDays > 1) "Day $dayNumber route summary" else "Route summary",
+                    style = MaterialTheme.typography.titleMedium
+                )
             }
             when {
                 loading -> {
@@ -1047,14 +1216,14 @@ private data class MapWaypoint(val name: String, val cumulativeKm: Double)
  *  per-leg distances on the last-fetched [routeInfo], so both sides are on the same scale. */
 private fun openInGoogleMaps(
     context: Context,
-    plan: RoutePlan,
+    plan: RouteDay,
     routeInfo: RouteRepository.RouteInfo?,
     pitstops: List<RouteRepository.Pitstop>
 ) {
     val validStops = plan.toStops.map { it.trim() }.filter { it.isNotBlank() }
     if (plan.from.isBlank() || validStops.isEmpty()) return
 
-    val namedChain = listOf(plan.from) + validStops
+    val namedChain = listOf(plan.from.trim()) + validStops
     val cumulativeKm = mutableListOf(0.0)
     if (routeInfo != null && routeInfo.legDistancesMeters.size >= namedChain.size - 1) {
         var running = 0.0
@@ -1073,8 +1242,13 @@ private fun openInGoogleMaps(
         .mapIndexed { i, name -> MapWaypoint(name, cumulativeKm[i + 1]) }
     val pitstopPoints = if (routeInfo != null) pitstops.map { MapWaypoint(it.placeName, it.distanceKm) } else emptyList()
 
-    val beforeDestination = (intermediateNamed + pitstopPoints).sortedBy { it.cumulativeKm }
-    val waypointNames = if (plan.roundTrip) (beforeDestination + lastNamed).map { it.name } else beforeDestination.map { it.name }
+    // On a round trip the last typed stop is a waypoint too, and pitstops found on the drive back
+    // (further along than that stop) must come after it, so everything is sorted together.
+    val waypointNames = if (plan.roundTrip) {
+        (intermediateNamed + pitstopPoints + lastNamed).sortedBy { it.cumulativeKm }.map { it.name }
+    } else {
+        (intermediateNamed + pitstopPoints).sortedBy { it.cumulativeKm }.map { it.name }
+    }
 
     val origin = URLEncoder.encode(plan.from, "UTF-8")
     val destinationName = if (plan.roundTrip) plan.from else lastNamed.name

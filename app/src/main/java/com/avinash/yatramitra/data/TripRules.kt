@@ -23,6 +23,10 @@ object TripRules {
     fun canEditPlan(role: MemberRole, status: TripStatus): Boolean =
         role == MemberRole.ORGANIZER && !isReadOnly(status)
 
+    /** Only the Organizer starts the trip, once, while it is still ongoing. */
+    fun canStartTrip(role: MemberRole, status: TripStatus, startedAtMillis: Long): Boolean =
+        role == MemberRole.ORGANIZER && status == TripStatus.ONGOING && startedAtMillis == 0L
+
     /**
      * Pulls a trip code out of whatever was typed or pasted: the bare code in any case, with
      * stray spaces, dashes or invisible characters removed, or the whole invite message / link

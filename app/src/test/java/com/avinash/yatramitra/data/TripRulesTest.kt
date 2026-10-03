@@ -32,6 +32,14 @@ class TripRulesTest {
         assertFalse(TripRules.canEditPlan(MemberRole.JOINER, TripStatus.COMPLETED))
     }
 
+    @Test
+    fun `only the organizer starts an ongoing trip, and only once`() {
+        assertTrue(TripRules.canStartTrip(MemberRole.ORGANIZER, TripStatus.ONGOING, 0L))
+        assertFalse(TripRules.canStartTrip(MemberRole.ORGANIZER, TripStatus.ONGOING, 1_700_000_000_000L))
+        assertFalse(TripRules.canStartTrip(MemberRole.ORGANIZER, TripStatus.COMPLETED, 0L))
+        assertFalse(TripRules.canStartTrip(MemberRole.JOINER, TripStatus.ONGOING, 0L))
+    }
+
     // ---- Joining by code ----
 
     @Test

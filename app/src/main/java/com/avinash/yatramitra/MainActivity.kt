@@ -1,7 +1,10 @@
 package com.avinash.yatramitra
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -26,6 +29,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.ListAlt
 import androidx.compose.material.icons.filled.Map
@@ -34,12 +38,16 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -75,6 +83,7 @@ import com.avinash.yatramitra.data.AuthRepository
 import com.avinash.yatramitra.data.LocalStore
 import com.avinash.yatramitra.data.ThemeMode
 import com.avinash.yatramitra.data.ThemePreference
+import com.avinash.yatramitra.data.TripNotify
 import com.avinash.yatramitra.data.TripRepository
 import com.avinash.yatramitra.data.TripRules
 import com.avinash.yatramitra.model.Member
@@ -92,6 +101,8 @@ import com.avinash.yatramitra.ui.theme.Spacing
 import com.avinash.yatramitra.ui.theme.YatraMitraTheme
 import com.avinash.yatramitra.ui.util.launchSafely
 import kotlinx.coroutines.launch
+import java.text.DateFormat
+import java.util.Date
 
 class MainActivity : ComponentActivity() {
     // Set from a yatramitra://join?code=XXXXXX deep link (see the second intent-filter in
@@ -267,8 +278,12 @@ private fun TripScaffold(
     var groupName by remember { mutableStateOf("") }
     var tripStatus by remember { mutableStateOf(TripStatus.ONGOING) }
     var metaLoaded by remember { mutableStateOf(false) }
+    var startedAtMillis by remember { mutableStateOf(0L) }
+    var startedBy by remember { mutableStateOf("") }
     var showProfile by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showStartConfirm by remember { mutableStateOf(false) }
+    var showNotify by remember { mutableStateOf(false) }
 
     LaunchedEffect(session.tripCode) {
         launch {
@@ -287,6 +302,8 @@ private fun TripScaffold(
                 }
                 groupName = it.groupName
                 tripStatus = it.status
+                startedAtMillis = it.startedAtMillis
+                startedBy = it.startedBy
                 metaLoaded = true
             }
         }
@@ -315,6 +332,9 @@ private fun TripScaffold(
     val isReadOnly = TripRules.isReadOnly(tripStatus)
     val canMarkCompleted = isOrganizer && tripStatus == TripStatus.ONGOING
     val canReopen = isOrganizer && tripStatus == TripStatus.COMPLETED
+    val canStartTrip = TripRules.canStartTrip(currentRole, tripStatus, startedAtMillis)
+    val canNotifyAgain = isOrganizer && tripStatus == TripStatus.ONGOING && startedAtMillis > 0L
+    val myName = members.find { it.id == session.memberId }?.name ?: session.memberName
     val canDeleteTrip = tripStatus == TripStatus.COMPLETED || (tripStatus == TripStatus.ONGOING && isOrganizer)
     val onError: (String) -> Unit = { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
 
@@ -336,11 +356,17 @@ private fun TripScaffold(
                 role = currentRole,
                 memberName = session.memberName,
                 tripStatus = tripStatus,
+                startedAtMillis = startedAtMillis,
+                startedBy = startedBy,
+                canStartTrip = canStartTrip,
+                canNotifyAgain = canNotifyAgain,
                 canMarkCompleted = canMarkCompleted,
                 canReopen = canReopen,
                 canDeleteTrip = canDeleteTrip,
                 onHome = { onHome(null) },
                 onAvatarClick = { showProfile = true },
+                onStartTrip = { showStartConfirm = true },
+                onNotifyAgain = { showNotify = true },
                 onMarkCompleted = { setStatus(TripStatus.COMPLETED) },
                 onReopen = { setStatus(TripStatus.ONGOING) },
                 onDeleteTrip = { showDeleteConfirm = true },
@@ -432,6 +458,40 @@ private fun TripScaffold(
         )
     }
 
+    if (showStartConfirm) {
+        AlertDialog(
+            onDismissRequest = { showStartConfirm = false },
+            title = { Text("Start \"${groupName.ifBlank { "this trip" }}\"?") },
+            text = {
+                Text(
+                    "Everyone with YatraMitra sees \"Trip started\" at the top of this trip straight away. " +
+                        "Next you can message everyone else on the trip by text, email or WhatsApp. " +
+                        "Everything stays editable until you mark the trip completed."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showStartConfirm = false
+                    scope.launchSafely(onError, "Couldn't start the trip — check your internet connection.") {
+                        TripRepository.startTrip(session.tripCode, myName)
+                        showNotify = true
+                    }
+                }) { Text("Start trip") }
+            },
+            dismissButton = { TextButton(onClick = { showStartConfirm = false }) { Text("Cancel") } }
+        )
+    }
+
+    if (showNotify) {
+        NotifyMembersDialog(
+            members = members,
+            myMemberId = session.memberId,
+            message = TripNotify.startedMessage(groupName, session.tripCode),
+            subject = "${groupName.ifBlank { "Our trip" }} has started",
+            onDismiss = { showNotify = false }
+        )
+    }
+
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
@@ -466,11 +526,17 @@ private fun TripTopBar(
     role: MemberRole,
     memberName: String,
     tripStatus: TripStatus,
+    startedAtMillis: Long,
+    startedBy: String,
+    canStartTrip: Boolean,
+    canNotifyAgain: Boolean,
     canMarkCompleted: Boolean,
     canReopen: Boolean,
     canDeleteTrip: Boolean,
     onHome: () -> Unit,
     onAvatarClick: () -> Unit,
+    onStartTrip: () -> Unit,
+    onNotifyAgain: () -> Unit,
     onMarkCompleted: () -> Unit,
     onReopen: () -> Unit,
     onDeleteTrip: () -> Unit,
@@ -510,12 +576,26 @@ private fun TripTopBar(
                 )
                 Spacer(Modifier.width(Spacing.xs))
                 InitialsAvatar(name = memberName, size = 32.dp, modifier = Modifier.clickable(onClick = onAvatarClick))
-                if (canMarkCompleted || canReopen || canDeleteTrip) {
+                if (canStartTrip || canNotifyAgain || canMarkCompleted || canReopen || canDeleteTrip) {
                     Box {
                         IconButton(onClick = { showMenu = true }) {
                             Icon(Icons.Filled.MoreVert, contentDescription = "Trip options")
                         }
                         DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                            if (canStartTrip) {
+                                DropdownMenuItem(
+                                    text = { Text("Start trip & notify everyone") },
+                                    leadingIcon = { Icon(Icons.Filled.Flag, contentDescription = null) },
+                                    onClick = { showMenu = false; onStartTrip() }
+                                )
+                            }
+                            if (canNotifyAgain) {
+                                DropdownMenuItem(
+                                    text = { Text("Notify everyone again") },
+                                    leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
+                                    onClick = { showMenu = false; onNotifyAgain() }
+                                )
+                            }
                             if (canMarkCompleted) {
                                 DropdownMenuItem(
                                     text = { Text("Mark as completed") },
@@ -573,5 +653,129 @@ private fun TripTopBar(
                 )
             }
         }
+        if (canStartTrip) {
+            Spacer(Modifier.height(Spacing.xs2))
+            FilledTonalButton(onClick = onStartTrip, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Filled.Flag, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Start trip & notify everyone")
+            }
+        } else if (startedAtMillis > 0L && tripStatus == TripStatus.ONGOING) {
+            Spacer(Modifier.height(Spacing.xs2))
+            val startedText = remember(startedAtMillis) {
+                DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(startedAtMillis))
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.shapes.small)
+                    .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+            ) {
+                Icon(
+                    Icons.Filled.Flag,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "Trip started $startedText" + if (startedBy.isNotBlank()) " by $startedBy" else "",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+        }
     }
+}
+
+/** After "Start trip": hands the message to the phone's own SMS, email or WhatsApp app, already
+ *  addressed to everyone on the trip. This also reaches companions who were added by phone or
+ *  email and don't have YatraMitra; anyone with the app also sees the "Trip started" banner. */
+@Composable
+private fun NotifyMembersDialog(
+    members: List<Member>,
+    myMemberId: String,
+    message: String,
+    subject: String,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    // Members who joined with their own account have no number or email on the trip itself, so
+    // those are looked up from their profiles; until then, use what the trip already has.
+    var contacts by remember { mutableStateOf(members) }
+    var lookingUp by remember { mutableStateOf(true) }
+    LaunchedEffect(members) {
+        contacts = runCatching { TripRepository.contactsFor(members) }.getOrDefault(members)
+        lookingUp = false
+    }
+    val recipients = remember(contacts, myMemberId) { TripNotify.recipients(contacts, myMemberId) }
+    val othersCount = members.count { it.id != myMemberId }
+
+    fun launch(intent: Intent) {
+        try {
+            context.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(context, "No app on this phone can send that.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tell everyone the trip has started") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (othersCount == 0) {
+                    Text(
+                        "Nobody else is on this trip yet. Add people on the Route tab, or share the invite.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                if (lookingUp) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                if (recipients.phones.isNotEmpty()) {
+                    Button(
+                        onClick = {
+                            launch(
+                                Intent(Intent.ACTION_SENDTO, Uri.parse(TripNotify.smsTarget(recipients.phones)))
+                                    .putExtra("sms_body", message)
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Text message to ${recipients.phones.size} ${if (recipients.phones.size == 1) "person" else "people"}") }
+                }
+                if (recipients.emails.isNotEmpty()) {
+                    OutlinedButton(
+                        onClick = {
+                            launch(Intent(Intent.ACTION_SENDTO, Uri.parse(TripNotify.mailtoTarget(recipients.emails, subject, message))))
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Email ${recipients.emails.size} ${if (recipients.emails.size == 1) "person" else "people"}") }
+                }
+                OutlinedButton(
+                    onClick = {
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, message)
+                        }
+                        launch(Intent.createChooser(send, "Send to your trip group"))
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("WhatsApp group or another app") }
+                if (!lookingUp && recipients.unreachable.isNotEmpty()) {
+                    Text(
+                        "No phone number or email for ${recipients.unreachable.joinToString(", ")}. " +
+                            "Use WhatsApp or another app to reach them.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    "Everyone who has YatraMitra also sees \"Trip started\" at the top of the trip.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } }
+    )
 }

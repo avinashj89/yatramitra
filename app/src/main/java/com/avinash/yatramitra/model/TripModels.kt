@@ -31,14 +31,19 @@ enum class RoutePreference { FASTEST, SURPRISE }
  *  arbitrary but reasonable starting point, not a meaningful "recommended" set. */
 val DEFAULT_PITSTOP_CATEGORIES = setOf("Temples & Spiritual", "Dhabas & Highway Food", "Heritage & Forts")
 
-/** The From/To route-planning form. Supports up to 4 "To" stops, in order. The trip's display
- *  name lives only on [TripMeta.groupName] (set once at creation) — this used to also carry its
- *  own [tripName], which showed up as a second, always-blank "Trip name" field on the Route tab
- *  that looked like the app had forgotten what was just typed on the homepage. */
-data class RoutePlan(
+/** One day's drive on the Route tab: where that day starts, up to 4 "To" stops in order, and
+ *  whether that day ends back where it started. */
+data class RouteDay(
     val from: String = "",
     val toStops: List<String> = listOf(""), // 1 to 4 entries
-    val roundTrip: Boolean = false,
+    val roundTrip: Boolean = false
+)
+
+/** The route-planning form: one [RouteDay] per day of the trip (Day 1, Day 2, ...), plus the
+ *  pitstop settings shared by every day. The trip's display name lives only on
+ *  [TripMeta.groupName]. */
+data class RoutePlan(
+    val days: List<RouteDay> = listOf(RouteDay()), // never empty
     val breakEvery: String = "",       // free-typed number, kept as String for easy text-field binding
     val breakUnit: BreakUnit = BreakUnit.HOURS,
     val routePreference: RoutePreference = RoutePreference.FASTEST,
@@ -53,6 +58,7 @@ data class RoutePlan(
 ) {
     companion object {
         const val MAX_TO_STOPS = 4
+        const val MAX_DAYS = 15
     }
 }
 
@@ -137,7 +143,10 @@ data class TripMeta(
     val groupName: String = "",
     val status: TripStatus = TripStatus.ONGOING,
     /** False once the server confirms the trip document is gone (someone deleted the trip). */
-    val exists: Boolean = true
+    val exists: Boolean = true,
+    /** When the Organizer tapped "Start trip" (0 = not started yet), and their name. */
+    val startedAtMillis: Long = 0L,
+    val startedBy: String = ""
 )
 
 enum class SuggestionStatus { PENDING, ACCEPTED, DISMISSED }

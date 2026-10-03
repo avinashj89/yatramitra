@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.avinash.yatramitra.data.AuthErrors
 import com.avinash.yatramitra.data.AuthRepository
 import com.avinash.yatramitra.ui.components.YatraMitraLogo
 import com.avinash.yatramitra.ui.theme.YatraMitraTheme
@@ -194,13 +195,17 @@ private fun AuthScreenContent(onAuthenticated: () -> Unit, startAtVerification: 
                 Button(
                     onClick = {
                         val activity = context as? Activity
+                        val number = AuthErrors.normalizePhone(phone)
                         if (activity == null) {
                             error = "Can't verify your phone right now — try again."
+                        } else if (number == null) {
+                            error = "That phone number doesn't look right. Type it as +91 followed by the 10-digit number."
                         } else {
                             error = null
                             loading = true
+                            phone = number
                             AuthRepository.sendPhoneOtp(
-                                phoneNumber = phone,
+                                phoneNumber = number,
                                 activity = activity,
                                 pendingDisplayName = name,
                                 onCodeSent = { id ->

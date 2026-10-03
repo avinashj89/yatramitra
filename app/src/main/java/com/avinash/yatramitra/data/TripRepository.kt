@@ -8,6 +8,7 @@ import com.avinash.yatramitra.model.ItinerarySuggestion
 import com.avinash.yatramitra.model.ItineraryStop
 import com.avinash.yatramitra.model.Member
 import com.avinash.yatramitra.model.MemberRole
+import com.avinash.yatramitra.model.RouteDay
 import com.avinash.yatramitra.model.RoutePlan
 import com.avinash.yatramitra.model.RoutePreference
 import com.avinash.yatramitra.model.RouteSuggestion
@@ -58,7 +59,9 @@ object TripRepository {
 
     private fun metaOf(doc: DocumentSnapshot) = TripMeta(
         groupName = doc.getString("groupName") ?: "Our trip",
-        status = runCatching { TripStatus.valueOf(doc.getString("status") ?: "") }.getOrDefault(TripStatus.ONGOING)
+        status = runCatching { TripStatus.valueOf(doc.getString("status") ?: "") }.getOrDefault(TripStatus.ONGOING),
+        startedAtMillis = doc.getLong("startedAt") ?: 0L,
+        startedBy = doc.getString("startedBy").orEmpty()
     )
 
     private fun describe(e: Exception): String = when ((e as? FirebaseFirestoreException)?.code) {
@@ -277,38 +280,9 @@ object TripRepository {
             .addOnFailureListener { Log.w(TAG, "route save for $code failed", it) }
     }
 
-    private fun routePlanToMap(plan: RoutePlan): Map<String, Any?> = mapOf(
-        "from" to plan.from,
-        "toStops" to plan.toStops,
-        "roundTrip" to plan.roundTrip,
-        "breakEvery" to plan.breakEvery,
-        "breakUnit" to plan.breakUnit.name,
-        "routePreference" to plan.routePreference.name,
-        "pitstopsEnabled" to plan.pitstopsEnabled,
-        "pitstopCategories" to plan.pitstopCategories.toList()
-    )
+    private fun routePlanToMap(plan: RoutePlan): Map<String, Any?> = RoutePlans.toMap(plan)
 
-    private fun mapToRoutePlan(map: Map<*, *>?): RoutePlan {
-        if (map == null) return RoutePlan()
-        val toStops = (map["toStops"] as? List<*>)?.filterIsInstance<String>()?.ifEmpty { listOf("") }
-        // Absent on a trip whose route plan was saved before this field existed -- default to the
-        // same "on, with a sensible starting set" behavior those trips already had.
-        val pitstopCategories = (map["pitstopCategories"] as? List<*>)
-            ?.filterIsInstance<String>()?.toSet()
-            ?: DEFAULT_PITSTOP_CATEGORIES
-        return RoutePlan(
-            from = map["from"] as? String ?: "",
-            toStops = toStops ?: listOf(""),
-            roundTrip = map["roundTrip"] as? Boolean ?: false,
-            breakEvery = map["breakEvery"] as? String ?: "",
-            breakUnit = runCatching { BreakUnit.valueOf(map["breakUnit"] as? String ?: "") }
-                .getOrDefault(BreakUnit.HOURS),
-            routePreference = runCatching { RoutePreference.valueOf(map["routePreference"] as? String ?: "") }
-                .getOrDefault(RoutePreference.FASTEST),
-            pitstopsEnabled = map["pitstopsEnabled"] as? Boolean ?: true,
-            pitstopCategories = pitstopCategories
-        )
-    }
+    private fun mapToRoutePlan(map: Map<*, *>?): RoutePlan = RoutePlans.fromMap(map)
 
     // ---- Itinerary (shared, replaces the old per-phone local-only copy) ----
 
@@ -341,21 +315,28 @@ object TripRepository {
             .await()
     }
 
-    /** Regenerates Day 1's auto-populated rows (route start, pitstops, route end) from the
-     *  current route plan and freshly-computed pitstops, while preserving any rows the Organizer
-     *  added manually themselves — called when "Generate pitstops" is used on the Route tab. */
-    suspend fun regenerateDay1FromRoute(code: String, plan: RoutePlan, pitstops: List<RouteRepository.Pitstop>) {
+    /** Regenerates one itinerary day's auto-populated rows (route start, pitstops, route end) from
+     *  that day of the route ([dayIndex] 0 = "Day 1"), while preserving any rows the Organizer
+     *  added manually — called from the Route tab's "Generate pitstops" / "Add to Itinerary". */
+    suspend fun regenerateItineraryDayFromRoute(
+        code: String,
+        dayIndex: Int,
+        day: RouteDay,
+        pitstops: List<RouteRepository.Pitstop>
+    ) {
+        val label = "Day ${dayIndex + 1}"
         val dayCollection = db.collection("trips").document(code.uppercase()).collection("itineraryDays")
-        val existing = dayCollection.whereEqualTo("label", "Day 1").limit(1).get().await().documents.firstOrNull()
-        val manualStops = existing?.let { docToItineraryDay(it) }?.stops?.filter { it.source == StopSource.MANUAL } ?: emptyList()
+        val existing = dayCollection.whereEqualTo("label", label).limit(1).get().await().documents.firstOrNull()
+        val existingDay = existing?.let { docToItineraryDay(it) }
+        val manualStops = existingDay?.stops?.filter { it.source == StopSource.MANUAL } ?: emptyList()
 
-        val validStops = plan.toStops.map { it.trim() }.filter { it.isNotBlank() }
-        val destinationName = if (plan.roundTrip) plan.from else validStops.lastOrNull().orEmpty()
+        val start = day.from.trim()
+        val destinationName = RoutePlans.endpoint(day)
 
         var order = 0
         val autoStops = mutableListOf<ItineraryStop>()
-        if (plan.from.isNotBlank()) {
-            autoStops.add(ItineraryStop(id = UUID.randomUUID().toString(), place = plan.from, order = order++, source = StopSource.ROUTE_START))
+        if (start.isNotBlank()) {
+            autoStops.add(ItineraryStop(id = UUID.randomUUID().toString(), place = start, order = order++, source = StopSource.ROUTE_START))
         }
         pitstops.forEach { p ->
             val hours = (p.elapsedMinutes / 60).toInt()
@@ -377,7 +358,26 @@ object TripRepository {
         val finalStops = autoStops + manualStops.mapIndexed { i, s -> s.copy(order = order + i) }
 
         val dayId = existing?.id ?: UUID.randomUUID().toString()
-        saveItineraryDay(code, ItineraryDay(id = dayId, label = "Day 1", order = 0, stops = finalStops))
+        saveItineraryDay(code, ItineraryDay(id = dayId, label = label, order = existingDay?.order ?: dayIndex, stops = finalStops))
+    }
+
+    /** Marks the trip as started (the Organizer's "Start trip"); every open phone shows it live. */
+    suspend fun startTrip(code: String, startedBy: String) {
+        db.collection("trips").document(code.uppercase())
+            .update(mapOf("startedAt" to System.currentTimeMillis(), "startedBy" to startedBy))
+            .await()
+    }
+
+    /** Contact details for notifying members: a member who joined with their own account has no
+     *  phone or email on their trip entry, so those come from their profile (`users/{uid}`). */
+    suspend fun contactsFor(members: List<Member>): List<Member> = members.map { m ->
+        if (m.uid == null || (m.phone.isNotBlank() && m.email.isNotBlank())) return@map m
+        val profile = runCatching { db.collection("users").document(m.uid).get().await() }.getOrNull()
+        if (profile == null || !profile.exists()) return@map m
+        m.copy(
+            phone = m.phone.ifBlank { profile.getString("phone").orEmpty() },
+            email = m.email.ifBlank { profile.getString("email").orEmpty() }
+        )
     }
 
     private fun itineraryDayToMap(day: ItineraryDay): Map<String, Any?> = mapOf(

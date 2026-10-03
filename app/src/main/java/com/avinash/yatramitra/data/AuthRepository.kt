@@ -2,7 +2,9 @@ package com.avinash.yatramitra.data
 
 import android.app.Activity
 import com.google.firebase.FirebaseException
+import com.google.firebase.FirebaseTooManyRequestsException
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.auth.PhoneAuthCredential
 import com.google.firebase.auth.PhoneAuthOptions
 import com.google.firebase.auth.PhoneAuthProvider
@@ -81,7 +83,7 @@ object AuthRepository {
             }
 
             override fun onVerificationFailed(e: FirebaseException) {
-                onError(e.message ?: "Couldn't send the verification code.")
+                onError(friendly(e))
             }
 
             override fun onCodeSent(verificationId: String, token: PhoneAuthProvider.ForceResendingToken) {
@@ -122,6 +124,12 @@ object AuthRepository {
                 }
                 onSuccess()
             }
-            .addOnFailureListener { onError(it.message ?: "That code didn't work — try again.") }
+            .addOnFailureListener { onError(friendly(it)) }
     }
+
+    private fun friendly(e: Exception): String = AuthErrors.phoneMessage(
+        errorCode = (e as? FirebaseAuthException)?.errorCode,
+        rawMessage = e.message,
+        tooManyRequests = e is FirebaseTooManyRequestsException
+    )
 }
