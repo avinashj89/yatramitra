@@ -8,3 +8,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+node_modules/
+.firebase/
+firebase-debug.log
+app/build/

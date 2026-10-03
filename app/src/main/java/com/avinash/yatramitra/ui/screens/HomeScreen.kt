@@ -47,7 +47,10 @@ fun HomeScreen(
     onJoinCodeHandled: () -> Unit = {},
     /** A one-off message to show on arrival, e.g. that the trip you were in was just deleted. */
     notice: String? = null,
-    onNoticeShown: () -> Unit = {}
+    onNoticeShown: () -> Unit = {},
+    /** A trip to open straight away, from a tapped notification. */
+    pendingOpenTripCode: String? = null,
+    onOpenTripHandled: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     val uid = AuthRepository.currentUserId
@@ -65,9 +68,14 @@ fun HomeScreen(
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    var tripsLoaded by remember { mutableStateOf(false) }
+
     LaunchedEffect(uid) {
         if (uid != null) {
-            TripRepository.observeMyTrips(uid).collect { trips = it }
+            TripRepository.observeMyTrips(uid).collect {
+                trips = it
+                tripsLoaded = true
+            }
         }
     }
 
@@ -179,6 +187,16 @@ fun HomeScreen(
                 loading = false
             }
         }
+    }
+
+    // A tapped notification: open that trip once the list has loaded. A trip that isn't in the
+    // list yet (someone just added you) is opened through the code, which finds your place on it.
+    LaunchedEffect(pendingOpenTripCode, tripsLoaded) {
+        val code = pendingOpenTripCode ?: return@LaunchedEffect
+        if (!tripsLoaded) return@LaunchedEffect
+        onOpenTripHandled()
+        val summary = trips.firstOrNull { it.tripCode.equals(code, ignoreCase = true) }
+        if (summary != null) openExisting(summary) else joinByCode(code)
     }
 
     fun createNewTrip(name: String) {

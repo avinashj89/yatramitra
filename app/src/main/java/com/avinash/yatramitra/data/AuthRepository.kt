@@ -1,10 +1,19 @@
 package com.avinash.yatramitra.data
 
+import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.Context
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import com.avinash.yatramitra.R
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.FirebaseException
 import com.google.firebase.FirebaseTooManyRequestsException
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthException
+import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.PhoneAuthCredential
 import com.google.firebase.auth.PhoneAuthOptions
 import com.google.firebase.auth.PhoneAuthProvider
@@ -13,7 +22,7 @@ import kotlinx.coroutines.tasks.await
 import java.util.concurrent.TimeUnit
 
 /**
- * Real user accounts (email+password or phone/OTP), replacing the old anonymous-only sign-in.
+ * Real user accounts (email+password, phone/OTP or Google), replacing the old anonymous-only sign-in.
  * Every trip screen now assumes [isSignedIn] is already true — the app gates on [AuthScreen]
  * before anything else, so [TripRepository] no longer needs to sign anyone in itself.
  */
@@ -58,6 +67,38 @@ object AuthRepository {
 
     suspend fun sendPasswordReset(email: String) {
         auth.sendPasswordResetEmail(email.trim()).await()
+    }
+
+    /** Thrown when Google sign-in can't start because the app has no Web client ID yet. */
+    class GoogleSignInNotSetUpException : Exception(
+        "Google sign-in isn't set up for this app yet. Please use Email or Phone for now."
+    )
+
+    /**
+     * "Continue with Google": shows Android's Google account sheet, then signs in to Firebase with
+     * the chosen account (creating the YatraMitra account on first use). Google accounts are
+     * already email-verified. Throws GetCredentialCancellationException if the user backs out.
+     */
+    suspend fun signInWithGoogle(activity: Activity) {
+        val clientId = googleWebClientId(activity) ?: throw GoogleSignInNotSetUpException()
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(GetSignInWithGoogleOption.Builder(clientId).build())
+            .build()
+        val credential = CredentialManager.create(activity).getCredential(activity, request).credential
+        if (credential !is CustomCredential || credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+            throw IllegalStateException("Google didn't return an account. Please try again.")
+        }
+        val google = GoogleIdTokenCredential.createFrom(credential.data)
+        auth.signInWithCredential(GoogleAuthProvider.getCredential(google.idToken, null)).await()
+    }
+
+    /** The Firebase project's Web client ID: from google-services.json (as the generated
+     *  default_web_client_id resource) or, failing that, from strings.xml. */
+    private fun googleWebClientId(context: Context): String? {
+        @SuppressLint("DiscouragedApi") // the resource only exists once google-services.json has it
+        val generated = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
+        val fromConfig = if (generated != 0) context.getString(generated) else ""
+        return fromConfig.ifBlank { context.getString(R.string.google_web_client_id) }.trim().takeIf { it.isNotBlank() }
     }
 
     fun signOut() {

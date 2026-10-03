@@ -149,6 +149,15 @@ data class TripMeta(
     val startedBy: String = ""
 )
 
+/** One message in a trip's Group chat. Posted straight to everyone; nobody approves it. */
+data class ChatMessage(
+    val id: String = "",
+    val authorMemberId: String = "",
+    val authorName: String = "",
+    val text: String = "",
+    val createdAtMillis: Long = 0L
+)
+
 enum class SuggestionStatus { PENDING, ACCEPTED, DISMISSED }
 
 /** A joiner's free-text suggestion for a route/stop change. Accepting one just marks it resolved

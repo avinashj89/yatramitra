@@ -57,8 +57,6 @@ import com.avinash.yatramitra.model.PlaceSuggestion
 import com.avinash.yatramitra.model.RouteDay
 import com.avinash.yatramitra.model.RoutePlan
 import com.avinash.yatramitra.model.RoutePreference
-import com.avinash.yatramitra.model.RouteSuggestion
-import com.avinash.yatramitra.model.SuggestionStatus
 import com.avinash.yatramitra.model.TripStatus
 import com.avinash.yatramitra.ui.components.InitialsAvatar
 import com.avinash.yatramitra.ui.theme.Spacing
@@ -97,18 +95,10 @@ fun TripPlannerScreen(
     var selectedDayIndex by rememberSaveable { mutableStateOf(0) }
     var dayPendingRemoval by remember { mutableStateOf<Int?>(null) }
 
-    var suggestions by remember { mutableStateOf<List<RouteSuggestion>>(emptyList()) }
-    var suggestionText by remember { mutableStateOf("") }
-
     LaunchedEffect(session.tripCode) {
-        launch {
-            TripRepository.observeRoutePlan(session.tripCode).collect { remote ->
-                plan = remote
-                loaded = true
-            }
-        }
-        launch {
-            TripRepository.observeRouteSuggestions(session.tripCode).collect { suggestions = it }
+        TripRepository.observeRoutePlan(session.tripCode).collect { remote ->
+            plan = remote
+            loaded = true
         }
     }
 
@@ -155,7 +145,6 @@ fun TripPlannerScreen(
 
     val isOrganizer = currentRole == MemberRole.ORGANIZER
     val canEdit = TripRules.canEditPlan(currentRole, if (isReadOnly) TripStatus.COMPLETED else TripStatus.ONGOING)
-    val currentMemberName = members.find { it.id == session.memberId }?.name ?: session.memberName
     val hasRoute = RoutePlans.hasRoute(activeDay)
     val dayPitstops = computedPitstops[activeIndex].orEmpty()
 
@@ -285,41 +274,8 @@ fun TripPlannerScreen(
 
         HorizontalDivider()
 
-        RouteSuggestionsCard(
-            isOrganizer = isOrganizer,
-            isReadOnly = isReadOnly,
-            suggestions = suggestions,
-            currentMemberId = session.memberId,
-            suggestionText = suggestionText,
-            onSuggestionTextChange = { suggestionText = it },
-            onSubmit = {
-                val text = suggestionText.trim()
-                if (text.isNotBlank()) {
-                    // Clear straight away: the post shows in the list at once, and the box used to
-                    // keep the text until the server answered, inviting a second tap (a duplicate).
-                    suggestionText = ""
-                    scope.launchSafely(
-                        onError = { message ->
-                            if (suggestionText.isBlank()) suggestionText = text
-                            onError(message)
-                        },
-                        errorMessage = "Couldn't send your suggestion — check your internet connection."
-                    ) {
-                        TripRepository.addRouteSuggestion(session.tripCode, session.memberId, currentMemberName, text)
-                    }
-                }
-            },
-            onAccept = { id ->
-                scope.launchSafely(onError, "Couldn't accept that suggestion — check your internet connection.") {
-                    TripRepository.updateRouteSuggestionStatus(session.tripCode, id, SuggestionStatus.ACCEPTED)
-                }
-            },
-            onDismiss = { id ->
-                scope.launchSafely(onError, "Couldn't dismiss that suggestion — check your internet connection.") {
-                    TripRepository.updateRouteSuggestionStatus(session.tripCode, id, SuggestionStatus.DISMISSED)
-                }
-            }
-        )
+        // Ideas for the route now go straight into the Group chat tab (no accept/dismiss step).
+        GroupChatHint("Want a different stop or route? Post it in the Group chat tab — everyone on the trip gets it.")
 
         Spacer(Modifier.height(24.dp))
     }
@@ -1014,112 +970,6 @@ private fun TripMembersCard(
                 TextButton(onClick = { showAddPeople = false }) { Text("Cancel") }
             }
         )
-    }
-}
-
-@Composable
-private fun RouteSuggestionsCard(
-    isOrganizer: Boolean,
-    isReadOnly: Boolean,
-    suggestions: List<RouteSuggestion>,
-    currentMemberId: String,
-    suggestionText: String,
-    onSuggestionTextChange: (String) -> Unit,
-    onSubmit: () -> Unit,
-    onAccept: (String) -> Unit,
-    onDismiss: (String) -> Unit
-) {
-    // Everyone on the trip sees every suggestion. This list used to be filtered on each phone to
-    // only the viewer's own posts, so a suggestion was saved and synced but never shown to the
-    // other group members (and the Organizer's notes never reached anyone).
-    val visibleSuggestions = suggestions
-
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Icon(Icons.Filled.QuestionAnswer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Text("Group Member change suggestions", style = MaterialTheme.typography.titleMedium)
-        }
-        Text(
-            if (isReadOnly) "This trip is completed, so new suggestions are closed."
-            else "Everyone on this trip sees these. The Organizer can accept or dismiss them.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        if (!isReadOnly) {
-            ElevatedCard {
-                Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = suggestionText,
-                        onValueChange = onSuggestionTextChange,
-                        placeholder = { Text("Suggest a route change or stop to discuss with the group…") },
-                        minLines = 2,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        Button(onClick = onSubmit, enabled = suggestionText.isNotBlank()) {
-                            Icon(Icons.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(if (isOrganizer) "Post route note" else "Send suggestion")
-                        }
-                    }
-                }
-            }
-        }
-
-        if (visibleSuggestions.isEmpty()) {
-            Text(
-                "No suggestions yet.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        visibleSuggestions.forEach { suggestion ->
-            ElevatedCard {
-                Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            if (suggestion.authorMemberId == currentMemberId) "${suggestion.authorName} (you)" else suggestion.authorName,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            when (suggestion.status) {
-                                SuggestionStatus.PENDING -> "Pending"
-                                SuggestionStatus.ACCEPTED -> "Accepted"
-                                SuggestionStatus.DISMISSED -> "Dismissed"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = when (suggestion.status) {
-                                SuggestionStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
-                                SuggestionStatus.ACCEPTED -> MaterialTheme.colorScheme.tertiary
-                                SuggestionStatus.DISMISSED -> MaterialTheme.colorScheme.error
-                            }
-                        )
-                    }
-                    Text(suggestion.text, style = MaterialTheme.typography.bodyMedium)
-                    if (isOrganizer && !isReadOnly && suggestion.status == SuggestionStatus.PENDING) {
-                        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                            TextButton(onClick = { onDismiss(suggestion.id) }) {
-                                Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Dismiss")
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            Button(onClick = { onAccept(suggestion.id) }) {
-                                Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Accept")
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 

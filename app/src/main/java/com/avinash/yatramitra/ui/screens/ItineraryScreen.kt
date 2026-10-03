@@ -31,12 +31,10 @@ import com.avinash.yatramitra.data.LocalStore
 import com.avinash.yatramitra.data.TripRepository
 import com.avinash.yatramitra.data.TripRules
 import com.avinash.yatramitra.model.ItineraryDay
-import com.avinash.yatramitra.model.ItinerarySuggestion
 import com.avinash.yatramitra.model.ItineraryStop
 import com.avinash.yatramitra.model.Member
 import com.avinash.yatramitra.model.MemberRole
 import com.avinash.yatramitra.model.StopSource
-import com.avinash.yatramitra.model.SuggestionStatus
 import com.avinash.yatramitra.ui.theme.Spacing
 import com.avinash.yatramitra.ui.util.launchSafely
 import kotlinx.coroutines.launch
@@ -57,24 +55,16 @@ fun ItineraryScreen(
     var loaded by remember { mutableStateOf(false) }
     var selectedDayId by remember { mutableStateOf<String?>(null) }
 
-    var suggestions by remember { mutableStateOf<List<ItinerarySuggestion>>(emptyList()) }
-    var suggestionText by remember { mutableStateOf("") }
-
     var editingStop by remember { mutableStateOf<ItineraryStop?>(null) }
     var showStopDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(session.tripCode) {
-        launch {
-            TripRepository.observeItineraryDays(session.tripCode).collect { remote ->
-                days = remote
-                if (selectedDayId == null || remote.none { it.id == selectedDayId }) {
-                    selectedDayId = remote.minByOrNull { it.order }?.id
-                }
-                loaded = true
+        TripRepository.observeItineraryDays(session.tripCode).collect { remote ->
+            days = remote
+            if (selectedDayId == null || remote.none { it.id == selectedDayId }) {
+                selectedDayId = remote.minByOrNull { it.order }?.id
             }
-        }
-        launch {
-            TripRepository.observeItinerarySuggestions(session.tripCode).collect { suggestions = it }
+            loaded = true
         }
     }
 
@@ -82,7 +72,6 @@ fun ItineraryScreen(
 
     val isOrganizer = currentRole == MemberRole.ORGANIZER
     val canEdit = isOrganizer && !isReadOnly
-    val currentMemberName = members.find { it.id == session.memberId }?.name ?: session.memberName
     val sortedDays = days.sortedBy { it.order }
     val selectedDay = sortedDays.find { it.id == selectedDayId }
 
@@ -207,42 +196,9 @@ fun ItineraryScreen(
                 }
             }
 
-            // Always shown: it used to appear only once a day existed, so before the Organizer
-            // added the first day, group members had nowhere to suggest anything.
+            // Timing or activity ideas now go straight into the Group chat tab.
             item {
-                ItinerarySuggestionsCard(
-                    isOrganizer = isOrganizer,
-                    isReadOnly = isReadOnly,
-                    suggestions = suggestions,
-                    currentMemberId = session.memberId,
-                    suggestionText = suggestionText,
-                    onSuggestionTextChange = { suggestionText = it },
-                    onSubmit = {
-                        val text = suggestionText.trim()
-                        if (text.isNotBlank()) {
-                            suggestionText = ""
-                            scope.launchSafely(
-                                onError = { message ->
-                                    if (suggestionText.isBlank()) suggestionText = text
-                                    onError(message)
-                                },
-                                errorMessage = "Couldn't send your suggestion — check your internet connection."
-                            ) {
-                                TripRepository.addItinerarySuggestion(session.tripCode, session.memberId, currentMemberName, text)
-                            }
-                        }
-                    },
-                    onAccept = { id ->
-                        scope.launchSafely(onError, "Couldn't accept that suggestion — check your internet connection.") {
-                            TripRepository.updateItinerarySuggestionStatus(session.tripCode, id, SuggestionStatus.ACCEPTED)
-                        }
-                    },
-                    onDismiss = { id ->
-                        scope.launchSafely(onError, "Couldn't dismiss that suggestion — check your internet connection.") {
-                            TripRepository.updateItinerarySuggestionStatus(session.tripCode, id, SuggestionStatus.DISMISSED)
-                        }
-                    }
-                )
+                GroupChatHint("Want a different time or activity? Post it in the Group chat tab — everyone on the trip gets it.")
             }
         }
     }
@@ -367,110 +323,6 @@ private fun StopRow(stop: ItineraryStop, canEdit: Boolean, onEdit: () -> Unit, o
             Spacer(Modifier.width(4.dp))
             IconButton(onClick = onDelete, modifier = Modifier.size(20.dp)) {
                 Icon(Icons.Filled.Delete, contentDescription = "Delete", modifier = Modifier.size(18.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun ItinerarySuggestionsCard(
-    isOrganizer: Boolean,
-    isReadOnly: Boolean,
-    suggestions: List<ItinerarySuggestion>,
-    currentMemberId: String,
-    suggestionText: String,
-    onSuggestionTextChange: (String) -> Unit,
-    onSubmit: () -> Unit,
-    onAccept: (String) -> Unit,
-    onDismiss: (String) -> Unit
-) {
-    // Everyone on the trip sees every suggestion (see the same fix on the Route tab).
-    val visibleSuggestions = suggestions
-
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Icon(Icons.Filled.QuestionAnswer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Text("Group Member schedule suggestions", style = MaterialTheme.typography.titleMedium)
-        }
-        Text(
-            if (isReadOnly) "This trip is completed, so new suggestions are closed."
-            else "Everyone on this trip sees these. The Organizer can accept or dismiss them.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        if (!isReadOnly) {
-            ElevatedCard {
-                Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = suggestionText,
-                        onValueChange = onSuggestionTextChange,
-                        placeholder = { Text("Suggest a timing or activity adjustment…") },
-                        minLines = 2,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        Button(onClick = onSubmit, enabled = suggestionText.isNotBlank()) {
-                            Icon(Icons.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Submit suggestion")
-                        }
-                    }
-                }
-            }
-        }
-
-        if (visibleSuggestions.isEmpty()) {
-            Text(
-                "No suggestions yet.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        visibleSuggestions.forEach { suggestion ->
-            ElevatedCard {
-                Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            if (suggestion.authorMemberId == currentMemberId) "${suggestion.authorName} (you)" else suggestion.authorName,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            when (suggestion.status) {
-                                SuggestionStatus.PENDING -> "Pending"
-                                SuggestionStatus.ACCEPTED -> "Accepted"
-                                SuggestionStatus.DISMISSED -> "Dismissed"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = when (suggestion.status) {
-                                SuggestionStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
-                                SuggestionStatus.ACCEPTED -> MaterialTheme.colorScheme.tertiary
-                                SuggestionStatus.DISMISSED -> MaterialTheme.colorScheme.error
-                            }
-                        )
-                    }
-                    Text(suggestion.text, style = MaterialTheme.typography.bodyMedium)
-                    if (isOrganizer && !isReadOnly && suggestion.status == SuggestionStatus.PENDING) {
-                        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                            TextButton(onClick = { onDismiss(suggestion.id) }) {
-                                Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Dismiss")
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            Button(onClick = { onAccept(suggestion.id) }) {
-                                Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Accept")
-                            }
-                        }
-                    }
-                }
             }
         }
     }

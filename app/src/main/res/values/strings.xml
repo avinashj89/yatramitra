@@ -1,3 +1,8 @@
 <resources>
     <string name="app_name">YatraMitra</string>
+    <!-- Google sign-in needs the Web client ID of the Firebase project. It normally comes from
+         app/google-services.json (downloaded again after turning Google sign-in on). If that file
+         has none, paste the ID shown in Firebase Console, Authentication, Sign-in method, Google,
+         Web SDK configuration, here instead. -->
+    <string name="google_web_client_id" translatable="false"></string>
 </resources>

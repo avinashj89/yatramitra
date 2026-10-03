@@ -1,13 +1,17 @@
 package com.avinash.yatramitra
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,6 +22,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,6 +35,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.ListAlt
 import androidx.compose.material.icons.filled.Map
@@ -92,7 +98,10 @@ import com.avinash.yatramitra.model.TripStatus
 import com.avinash.yatramitra.ui.components.InitialsAvatar
 import com.avinash.yatramitra.ui.components.ProfileSheet
 import com.avinash.yatramitra.ui.components.YatraMitraLogo
+import com.avinash.yatramitra.push.Notifications
+import com.avinash.yatramitra.push.PushTokens
 import com.avinash.yatramitra.ui.screens.AuthScreen
+import com.avinash.yatramitra.ui.screens.ChatScreen
 import com.avinash.yatramitra.ui.screens.ExpensesScreen
 import com.avinash.yatramitra.ui.screens.HomeScreen
 import com.avinash.yatramitra.ui.screens.ItineraryScreen
@@ -101,6 +110,7 @@ import com.avinash.yatramitra.ui.theme.Spacing
 import com.avinash.yatramitra.ui.theme.YatraMitraTheme
 import com.avinash.yatramitra.ui.util.launchSafely
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.DateFormat
 import java.util.Date
 
@@ -111,11 +121,18 @@ class MainActivity : ComponentActivity() {
     // recomposition or when navigating back to the homepage later in the same session.
     private var pendingJoinCode by mutableStateOf<String?>(null)
 
+    // Set when a trip notification is tapped: which trip to open, and which tab (the Group chat
+    // for a chat message).
+    private var pendingOpen by mutableStateOf<OpenRequest?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         ThemePreference.init(applicationContext)
+        Notifications.createChannel(applicationContext)
         pendingJoinCode = joinCodeFrom(intent)
+        // Only on a fresh start: after a rotation the same intent would reopen the trip again.
+        if (savedInstanceState == null) pendingOpen = openRequestFrom(intent)
         // Some Android devices carry an outdated TLS/crypto provider that fails to negotiate a
         // handshake with certain modern servers ("Handshake failed") even though the server side
         // is fine. This patches the device's provider at runtime via Play Services -- Google's
@@ -141,7 +158,9 @@ class MainActivity : ComponentActivity() {
             YatraMitraTheme(darkTheme = darkTheme) {
                 YatraMitraApp(
                     pendingJoinCode = pendingJoinCode,
-                    onJoinCodeHandled = { pendingJoinCode = null }
+                    onJoinCodeHandled = { pendingJoinCode = null },
+                    pendingOpen = pendingOpen,
+                    onOpenHandled = { pendingOpen = null }
                 )
             }
         }
@@ -151,6 +170,13 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         joinCodeFrom(intent)?.let { pendingJoinCode = it }
+        openRequestFrom(intent)?.let { pendingOpen = it }
+    }
+
+    private fun openRequestFrom(intent: Intent?): OpenRequest? {
+        val code = intent?.getStringExtra(Notifications.EXTRA_OPEN_TRIP)?.trim()?.uppercase()?.takeIf { it.isNotBlank() }
+            ?: return null
+        return OpenRequest(code, intent.getStringExtra(Notifications.EXTRA_OPEN_TAB))
     }
 
     private fun joinCodeFrom(intent: Intent?): String? {
@@ -160,19 +186,29 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** Open [tripCode] (from a tapped notification), on [tab] if given ("chat" for the Group chat). */
+data class OpenRequest(val tripCode: String, val tab: String?)
+
 private data class TopLevelDestination(val route: String, val label: String, val icon: ImageVector)
 
 private val destinations = listOf(
     TopLevelDestination("route-and-stops", "Route & Stops", Icons.Filled.Map),
     TopLevelDestination("itinerary", "Itinerary", Icons.Filled.ListAlt),
-    TopLevelDestination("expenses", "Expenses", Icons.Filled.AccountBalanceWallet)
+    TopLevelDestination("expenses", "Expenses", Icons.Filled.AccountBalanceWallet),
+    TopLevelDestination("chat", "Group chat", Icons.Filled.Forum)
 )
 
 /** Not signed in -> [AuthScreen]. Signed in, no trip open -> [HomeScreen]. Trip open -> the
- *  3-tab [TripScaffold]. How editable an open trip is depends only on its live status and your
+ *  tabbed [TripScaffold]. How editable an open trip is depends only on its live status and your
  *  role in it (see [TripRules]), never on how it was opened. */
 @Composable
-fun YatraMitraApp(pendingJoinCode: String? = null, onJoinCodeHandled: () -> Unit = {}) {
+fun YatraMitraApp(
+    pendingJoinCode: String? = null,
+    onJoinCodeHandled: () -> Unit = {},
+    pendingOpen: OpenRequest? = null,
+    onOpenHandled: () -> Unit = {}
+) {
+    val scope = rememberCoroutineScope()
     var authChecked by remember { mutableStateOf(false) }
     var signedIn by remember { mutableStateOf(false) }
     var mustVerifyEmail by remember { mutableStateOf(false) }
@@ -206,6 +242,8 @@ fun YatraMitraApp(pendingJoinCode: String? = null, onJoinCodeHandled: () -> Unit
                         phone = AuthRepository.currentUserPhone
                     )
                 }
+                // Point this phone's notifications at the signed-in account.
+                runCatching { PushTokens.register(uid) }
             }
         }
     }
@@ -221,9 +259,16 @@ fun YatraMitraApp(pendingJoinCode: String? = null, onJoinCodeHandled: () -> Unit
         SignedInApp(
             pendingJoinCode = pendingJoinCode,
             onJoinCodeHandled = onJoinCodeHandled,
+            pendingOpen = pendingOpen,
+            onOpenHandled = onOpenHandled,
             onSignedOut = {
-                AuthRepository.signOut()
-                signedIn = false
+                scope.launch {
+                    // Stop this phone getting the signed-out account's notifications. Done before
+                    // signing out (it needs the account), and never allowed to block signing out.
+                    withTimeoutOrNull(3_000) { runCatching { PushTokens.unregister() } }
+                    AuthRepository.signOut()
+                    signedIn = false
+                }
             }
         )
     }
@@ -237,9 +282,38 @@ private val SessionSaver = listSaver<LocalStore.Session?, String>(
 )
 
 @Composable
-private fun SignedInApp(pendingJoinCode: String?, onJoinCodeHandled: () -> Unit, onSignedOut: () -> Unit) {
+private fun SignedInApp(
+    pendingJoinCode: String?,
+    onJoinCodeHandled: () -> Unit,
+    pendingOpen: OpenRequest?,
+    onOpenHandled: () -> Unit,
+    onSignedOut: () -> Unit
+) {
     var activeTrip by rememberSaveable(stateSaver = SessionSaver) { mutableStateOf<LocalStore.Session?>(null) }
     var homeNotice by remember { mutableStateOf<String?>(null) }
+    // Trip (from a tapped notification) for the homepage to open, and the tab to show once it is.
+    var tripToOpen by remember { mutableStateOf<String?>(null) }
+    var requestedTab by remember { mutableStateOf<String?>(null) }
+
+    // Android 13+ shows nothing until the user allows notifications; ask once signed in.
+    val context = LocalContext.current
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !Notifications.canPost(context)) {
+            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    LaunchedEffect(pendingOpen) {
+        val request = pendingOpen ?: return@LaunchedEffect
+        requestedTab = request.tab
+        if (activeTrip?.tripCode?.equals(request.tripCode, ignoreCase = true) != true) {
+            // Another trip (or none) is open: go via the homepage, which opens it properly.
+            tripToOpen = request.tripCode
+            activeTrip = null
+        }
+        onOpenHandled()
+    }
 
     val current = activeTrip
     if (current == null) {
@@ -249,13 +323,17 @@ private fun SignedInApp(pendingJoinCode: String?, onJoinCodeHandled: () -> Unit,
             pendingJoinCode = pendingJoinCode,
             onJoinCodeHandled = onJoinCodeHandled,
             notice = homeNotice,
-            onNoticeShown = { homeNotice = null }
+            onNoticeShown = { homeNotice = null },
+            pendingOpenTripCode = tripToOpen,
+            onOpenTripHandled = { tripToOpen = null }
         )
     } else {
         // key(): a different trip gets fresh state (tabs, listeners) instead of the previous trip's.
         key(current.tripCode) {
             TripScaffold(
                 session = current,
+                requestedTab = requestedTab,
+                onTabHandled = { requestedTab = null },
                 onHome = { notice -> homeNotice = notice; activeTrip = null },
                 onSignedOut = onSignedOut
             )
@@ -266,6 +344,8 @@ private fun SignedInApp(pendingJoinCode: String?, onJoinCodeHandled: () -> Unit,
 @Composable
 private fun TripScaffold(
     session: LocalStore.Session,
+    requestedTab: String?,
+    onTabHandled: () -> Unit,
     onHome: (notice: String?) -> Unit,
     onSignedOut: () -> Unit
 ) {
@@ -418,10 +498,26 @@ private fun TripScaffold(
             }
             return@Scaffold
         }
+        // A tapped chat notification opens straight on the Group chat tab.
+        LaunchedEffect(requestedTab) {
+            val tab = requestedTab ?: return@LaunchedEffect
+            if (destinations.any { it.route == tab }) {
+                runCatching {
+                    navController.navigate(tab) {
+                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                }
+            }
+            onTabHandled()
+        }
         NavHost(
             navController = navController,
             startDestination = "route-and-stops",
-            modifier = Modifier.padding(innerPadding)
+            // consumeWindowInsets: the bottom bar's height is already taken, so the Group chat's
+            // keyboard padding only adds what the keyboard covers beyond it.
+            modifier = Modifier.padding(innerPadding).consumeWindowInsets(innerPadding)
         ) {
             composable("route-and-stops") {
                 TripPlannerScreen(
@@ -445,6 +541,9 @@ private fun TripScaffold(
             composable("expenses") {
                 ExpensesScreen(session = session, isReadOnly = isReadOnly, onError = onError)
             }
+            composable("chat") {
+                ChatScreen(session = session, members = members, isReadOnly = isReadOnly, onError = onError)
+            }
         }
     }
 
@@ -464,7 +563,7 @@ private fun TripScaffold(
             title = { Text("Start \"${groupName.ifBlank { "this trip" }}\"?") },
             text = {
                 Text(
-                    "Everyone with YatraMitra sees \"Trip started\" at the top of this trip straight away. " +
+                    "Everyone with YatraMitra gets a notification and sees \"Trip started\" at the top of this trip. " +
                         "Next you can message everyone else on the trip by text, email or WhatsApp. " +
                         "Everything stays editable until you mark the trip completed."
                 )
@@ -770,7 +869,8 @@ private fun NotifyMembersDialog(
                     )
                 }
                 Text(
-                    "Everyone who has YatraMitra also sees \"Trip started\" at the top of the trip.",
+                    "Everyone with YatraMitra also gets a phone notification and sees \"Trip started\" at the top of the trip. " +
+                        "These buttons are for people without the app.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -83,6 +83,14 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:33.1.2"))
     implementation("com.google.firebase:firebase-firestore")
     implementation("com.google.firebase:firebase-auth")
+    // Push notifications (Group chat, trip started, ...), sent by the server function in functions/.
+    implementation("com.google.firebase:firebase-messaging")
+
+    // "Continue with Google": Android's Credential Manager shows the Google account picker and
+    // returns an ID token that Firebase Auth signs in with.
+    implementation("androidx.credentials:credentials:1.3.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
 
     // Coroutines <-> Play Services task interop
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")

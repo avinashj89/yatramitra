@@ -7,9 +7,14 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.NoCredentialException
+import kotlinx.coroutines.CancellationException
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.avinash.yatramitra.data.AuthErrors
@@ -21,7 +26,7 @@ import kotlinx.coroutines.launch
 private enum class AuthMethod { EMAIL, PHONE }
 private enum class AuthMode { SIGN_IN, SIGN_UP }
 
-/** Real account sign-up/sign-in — email+password or phone/OTP. Shown before anything else in the
+/** Real account sign-up/sign-in — Google, email+password or phone/OTP. Shown before anything else in the
  *  app; [onAuthenticated] fires once Firebase confirms a session, and the homepage takes over.
  *
  *  Always rendered in the light palette, deliberately ignoring both the system dark-mode setting
@@ -88,6 +93,52 @@ private fun AuthScreenContent(onAuthenticated: () -> Unit, startAtVerification: 
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+
+        OutlinedButton(
+            onClick = {
+                val activity = context as? Activity
+                if (activity == null) {
+                    error = "Can't open Google sign-in right now — try again."
+                    return@OutlinedButton
+                }
+                error = null
+                loading = true
+                scope.launch {
+                    try {
+                        AuthRepository.signInWithGoogle(activity)
+                        onAuthenticated()
+                    } catch (e: GetCredentialCancellationException) {
+                        // Backed out of the Google account sheet: nothing to report.
+                    } catch (e: NoCredentialException) {
+                        error = "There's no Google account on this phone. Add one in the phone's Settings, or use Email."
+                    } catch (e: AuthRepository.GoogleSignInNotSetUpException) {
+                        error = e.message
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        error = "Google sign-in didn't work: ${e.message ?: "please try again."}"
+                    } finally {
+                        loading = false
+                    }
+                }
+            },
+            enabled = !loading,
+            modifier = Modifier.fillMaxWidth().height(48.dp)
+        ) {
+            Text("G", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(10.dp))
+            Text("Continue with Google")
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            HorizontalDivider(Modifier.weight(1f))
+            Text(
+                "  or  ",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            HorizontalDivider(Modifier.weight(1f))
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(

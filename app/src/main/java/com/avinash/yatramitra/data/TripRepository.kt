@@ -1,7 +1,6 @@
 package com.avinash.yatramitra.data
 
-import com.avinash.yatramitra.model.BreakUnit
-import com.avinash.yatramitra.model.DEFAULT_PITSTOP_CATEGORIES
+import com.avinash.yatramitra.model.ChatMessage
 import com.avinash.yatramitra.model.Expense
 import com.avinash.yatramitra.model.ItineraryDay
 import com.avinash.yatramitra.model.ItinerarySuggestion
@@ -10,7 +9,6 @@ import com.avinash.yatramitra.model.Member
 import com.avinash.yatramitra.model.MemberRole
 import com.avinash.yatramitra.model.RouteDay
 import com.avinash.yatramitra.model.RoutePlan
-import com.avinash.yatramitra.model.RoutePreference
 import com.avinash.yatramitra.model.RouteSuggestion
 import com.avinash.yatramitra.model.StopSource
 import com.avinash.yatramitra.model.SuggestionStatus
@@ -168,7 +166,10 @@ object TripRepository {
                 "role" to role.name,
                 "phone" to phone,
                 "email" to email,
-                "uid" to uid
+                "uid" to uid,
+                // Who did the adding (the same as uid when someone joins by themselves), so the
+                // notification server can tell "Sita joined" from "Avi added Sita".
+                "addedByUid" to AuthRepository.currentUserId
             )
         ).await()
         return ref.id
@@ -231,13 +232,15 @@ object TripRepository {
     suspend fun deleteTrip(code: String, myUid: String?) {
         val upperCode = code.uppercase()
         val tripRef = db.collection("trips").document(upperCode)
-        val subcollections = listOf("members", "expenses", "itineraryDays", "routeSuggestions", "itinerarySuggestions")
+        val subcollections = listOf("members", "expenses", "itineraryDays", "routeSuggestions", "itinerarySuggestions", "chat")
         for (name in subcollections) {
             val docs = tripRef.collection(name).get().await().documents
-            if (docs.isEmpty()) continue
-            val batch = db.batch()
-            docs.forEach { batch.delete(it.reference) }
-            batch.commit().await()
+            // A Firestore batch holds at most 500 writes; a long chat easily has more.
+            docs.chunked(450).forEach { chunk ->
+                val batch = db.batch()
+                chunk.forEach { batch.delete(it.reference) }
+                batch.commit().await()
+            }
         }
         tripRef.delete().await()
         if (myUid != null) {
@@ -364,7 +367,13 @@ object TripRepository {
     /** Marks the trip as started (the Organizer's "Start trip"); every open phone shows it live. */
     suspend fun startTrip(code: String, startedBy: String) {
         db.collection("trips").document(code.uppercase())
-            .update(mapOf("startedAt" to System.currentTimeMillis(), "startedBy" to startedBy))
+            .update(
+                mapOf(
+                    "startedAt" to System.currentTimeMillis(),
+                    "startedBy" to startedBy,
+                    "startedByUid" to AuthRepository.currentUserId
+                )
+            )
             .await()
     }
 
@@ -483,7 +492,9 @@ object TripRepository {
                     "splitAmongMemberIds" to expense.splitAmongMemberIds,
                     "customSplitAmounts" to expense.customSplitAmounts,
                     "splitPercentages" to expense.splitPercentages,
-                    "createdAt" to System.currentTimeMillis()
+                    "createdAt" to System.currentTimeMillis(),
+                    // Lets the notification server skip the person who added it.
+                    "createdByUid" to AuthRepository.currentUserId
                 )
             ).await()
     }
@@ -513,53 +524,74 @@ object TripRepository {
             .delete().await()
     }
 
-    // ---- Route & itinerary suggestions (joiner -> organizer collaborative flow) ----
+    // ---- Group chat ----
 
-    suspend fun addRouteSuggestion(code: String, authorMemberId: String, authorName: String, text: String) {
+    /** Posts straight to the trip's Group chat; everyone on the trip sees it at once, and the
+     *  server function (functions/index.js) sends it as a notification to their phones. */
+    suspend fun sendChatMessage(code: String, authorMemberId: String, authorName: String, authorUid: String?, text: String) {
         db.collection("trips").document(code.uppercase())
-            .collection("routeSuggestions").document()
-            .set(suggestionFields(authorMemberId, authorName, text))
+            .collection("chat").document()
+            .set(
+                mapOf(
+                    "authorMemberId" to authorMemberId,
+                    "authorName" to authorName,
+                    "authorUid" to authorUid,
+                    "text" to text,
+                    "createdAt" to System.currentTimeMillis()
+                )
+            )
             .await()
     }
+
+    fun observeChat(code: String): Flow<List<ChatMessage>> = callbackFlow {
+        val reg = db.collection("trips").document(code.uppercase())
+            .collection("chat")
+            .orderBy("createdAt", Query.Direction.ASCENDING)
+            .limitToLast(500)
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) {
+                    Log.w(TAG, "chat listener for $code failed", error)
+                    return@addSnapshotListener
+                }
+                trySend(snap.documents.map { doc ->
+                    ChatMessage(
+                        id = doc.id,
+                        authorMemberId = doc.getString("authorMemberId").orEmpty(),
+                        authorName = doc.getString("authorName").orEmpty(),
+                        text = doc.getString("text").orEmpty(),
+                        createdAtMillis = doc.getLong("createdAt") ?: 0L
+                    )
+                })
+            }
+        awaitClose { reg.remove() }
+    }
+
+    // ---- Older route & itinerary suggestions, now shown as Group chat history ----
 
     fun observeRouteSuggestions(code: String): Flow<List<RouteSuggestion>> =
         observeSuggestions(code, "routeSuggestions") { id, authorId, authorName, text, status, createdAt ->
             RouteSuggestion(id, authorId, authorName, text, status, createdAt)
         }
 
-    suspend fun updateRouteSuggestionStatus(code: String, suggestionId: String, status: SuggestionStatus) {
-        db.collection("trips").document(code.uppercase())
-            .collection("routeSuggestions").document(suggestionId)
-            .update("status", status.name)
-            .await()
-    }
-
-    suspend fun addItinerarySuggestion(code: String, authorMemberId: String, authorName: String, text: String) {
-        db.collection("trips").document(code.uppercase())
-            .collection("itinerarySuggestions").document()
-            .set(suggestionFields(authorMemberId, authorName, text))
-            .await()
-    }
-
     fun observeItinerarySuggestions(code: String): Flow<List<ItinerarySuggestion>> =
         observeSuggestions(code, "itinerarySuggestions") { id, authorId, authorName, text, status, createdAt ->
             ItinerarySuggestion(id, authorId, authorName, text, status, createdAt)
         }
 
-    suspend fun updateItinerarySuggestionStatus(code: String, suggestionId: String, status: SuggestionStatus) {
-        db.collection("trips").document(code.uppercase())
-            .collection("itinerarySuggestions").document(suggestionId)
-            .update("status", status.name)
+    // ---- Phones that should get this account's notifications ----
+
+    /** Records that this phone belongs to [uid], so the server function can notify it. The token
+     *  is the document id; signing in with another account on the same phone simply moves it. */
+    suspend fun saveDeviceToken(uid: String, token: String) {
+        db.collection("deviceTokens").document(token)
+            .set(mapOf("uid" to uid, "platform" to "android", "updatedAt" to System.currentTimeMillis()))
             .await()
     }
 
-    private fun suggestionFields(authorMemberId: String, authorName: String, text: String) = mapOf(
-        "authorMemberId" to authorMemberId,
-        "authorName" to authorName,
-        "text" to text,
-        "status" to SuggestionStatus.PENDING.name,
-        "createdAt" to System.currentTimeMillis()
-    )
+    /** Stops notifications to this phone (on sign-out). */
+    suspend fun removeDeviceToken(token: String) {
+        db.collection("deviceTokens").document(token).delete().await()
+    }
 
     private fun <T> observeSuggestions(
         code: String,
