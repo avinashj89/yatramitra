@@ -1,6 +1,7 @@
 {
   "firestore": {
-    "rules": "firestore.rules"
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
   },
   "functions": [
     {
@@ -8,5 +9,10 @@
       "codebase": "default",
       "ignore": ["node_modules", ".git", "test", "*.log"]
     }
-  ]
+  ],
+  "emulators": {
+    "firestore": { "host": "127.0.0.1", "port": 8085 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
 }

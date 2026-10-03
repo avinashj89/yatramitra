@@ -11,4 +11,6 @@ local.properties
 node_modules/
 .firebase/
 firebase-debug.log
+firestore-debug.log
+admin/dist/
 app/build/
