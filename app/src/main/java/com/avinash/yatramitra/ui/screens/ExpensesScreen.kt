@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.avinash.yatramitra.data.AuthRepository
 import com.avinash.yatramitra.data.Balances
 import com.avinash.yatramitra.data.LocalStore
 import com.avinash.yatramitra.data.TripRepository
@@ -109,7 +110,7 @@ fun ExpensesScreen(session: LocalStore.Session, isReadOnly: Boolean, onError: (S
                                     )
                                     IconButton(onClick = {
                                         scope.launchSafely(onError, "Couldn't save the group name — check your internet connection.") {
-                                            TripRepository.updateGroupName(session.tripCode, groupNameDraft)
+                                            TripRepository.updateGroupName(session.tripCode, groupNameDraft, AuthRepository.currentUserId)
                                             editingGroupName = false
                                         }
                                     }) { Icon(Icons.Filled.Check, contentDescription = "Save group name") }
@@ -152,7 +153,11 @@ fun ExpensesScreen(session: LocalStore.Session, isReadOnly: Boolean, onError: (S
                                         type = "text/plain"
                                         putExtra(
                                             Intent.EXTRA_TEXT,
-                                            "Join our trip on YatraMitra! Enter this code in the Expenses tab: ${session.tripCode}"
+                                            // The old text pointed people at the Expenses tab, which
+                                            // they can't reach before joining; joining is on the homepage.
+                                            "Join our trip on YatraMitra! Tap to open it in the app: " +
+                                                "yatramitra://join?code=${session.tripCode}\n" +
+                                                "Or open the app, tap \"Have a trip code?\" and enter code: ${session.tripCode}"
                                         )
                                     }
                                     context.startActivity(Intent.createChooser(send, "Share trip code"))
@@ -377,6 +382,11 @@ fun ExpensesScreen(session: LocalStore.Session, isReadOnly: Boolean, onError: (S
                     // Best-effort account match -- a failure here must never block adding the
                     // person below, which is the reliable, long-working part of this action.
                     val match = runCatching { TripRepository.findUserProfile(email, phone) }.getOrNull()
+                    val alreadyOnTrip = match?.let { m -> members.firstOrNull { it.uid == m.uid } }
+                    if (alreadyOnTrip != null) {
+                        onError("${alreadyOnTrip.name} is already on this trip.")
+                        return@launchSafely
+                    }
                     val memberId = TripRepository.joinTrip(
                         session.tripCode, name, role = MemberRole.JOINER, phone = phone, email = email, uid = match?.uid
                     )

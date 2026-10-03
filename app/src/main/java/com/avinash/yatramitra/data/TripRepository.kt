@@ -17,10 +17,14 @@ import com.avinash.yatramitra.model.TripMeta
 import com.avinash.yatramitra.model.TripStatus
 import com.avinash.yatramitra.model.TripSummary
 import com.avinash.yatramitra.model.UserProfile
+import android.util.Log
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.firestore.Source
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -38,16 +42,84 @@ import kotlin.random.Random
  *   trips/{tripCode}/expenses/{expenseId}     -> { description, amount, paidByMemberId, paidByName,
  *                                                  splitAmongMemberIds, customSplitAmounts, createdAt }
  */
+/** Result of looking a trip up by code: found (with its name and status), definitely not on the
+ *  server, or not checkable right now (offline, or the server refused) with the reason. */
+sealed class TripLookup {
+    data class Found(val meta: TripMeta, val fromCache: Boolean) : TripLookup()
+    object NotFound : TripLookup()
+    data class Unreachable(val reason: String) : TripLookup()
+}
+
 object TripRepository {
+
+    private const val TAG = "TripRepository"
 
     private val db by lazy { FirebaseFirestore.getInstance() }
 
+    private fun metaOf(doc: DocumentSnapshot) = TripMeta(
+        groupName = doc.getString("groupName") ?: "Our trip",
+        status = runCatching { TripStatus.valueOf(doc.getString("status") ?: "") }.getOrDefault(TripStatus.ONGOING)
+    )
+
+    private fun describe(e: Exception): String = when ((e as? FirebaseFirestoreException)?.code) {
+        FirebaseFirestoreException.Code.UNAVAILABLE -> "can't reach the server, check your internet connection"
+        FirebaseFirestoreException.Code.PERMISSION_DENIED -> "the server refused access (permission denied)"
+        else -> e.message ?: e.javaClass.simpleName
+    }
+
+    /**
+     * Looks a trip up on the server, so "not found" is only ever reported when the server itself
+     * says the trip does not exist, never because of a stale on-device cache. If the server can't
+     * be reached, a trip already cached on this device is still returned (so it opens offline);
+     * otherwise the reason is reported instead of a misleading "not found".
+     */
+    suspend fun lookupTrip(code: String): TripLookup {
+        val ref = db.collection("trips").document(code.uppercase())
+        return try {
+            val snap = ref.get(Source.SERVER).await()
+            if (snap.exists()) TripLookup.Found(metaOf(snap), fromCache = false) else TripLookup.NotFound
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "server lookup of trip $code failed", e)
+            val cached = runCatching { ref.get(Source.CACHE).await() }.getOrNull()
+            if (cached != null && cached.exists()) {
+                TripLookup.Found(metaOf(cached), fromCache = true)
+            } else {
+                TripLookup.Unreachable(describe(e))
+            }
+        }
+    }
+
+    /** The member entry this account already has on the trip, if any, so joining twice (or the
+     *  Organizer opening their own code on a second phone) reuses it instead of creating a duplicate.
+     *  If older versions already created duplicates, the Organizer entry wins, then the earliest. */
+    suspend fun findMemberByUid(code: String, uid: String): Member? {
+        val docs = db.collection("trips").document(code.uppercase())
+            .collection("members")
+            .whereEqualTo("uid", uid)
+            .get(Source.SERVER)
+            .await()
+            .documents
+        return TripRules.pickOwnMember(docs.map { docToMember(it) to (it.getLong("joinedAt") ?: 0L) })
+    }
+
+    private fun docToMember(doc: DocumentSnapshot) = Member(
+        id = doc.id,
+        name = doc.getString("name") ?: "",
+        role = runCatching { MemberRole.valueOf(doc.getString("role") ?: "") }.getOrDefault(MemberRole.JOINER),
+        phone = doc.getString("phone") ?: "",
+        email = doc.getString("email") ?: "",
+        uid = doc.getString("uid"),
+        upiId = doc.getString("upiId") ?: ""
+    )
+
     /** Creates a brand-new trip with a short, easy-to-read join code, e.g. "7F3K9Q". */
     suspend fun createTrip(groupName: String = ""): String {
-        val alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ" // no 0/O/1/I to avoid mix-ups
+        val alphabet = TripRules.CODE_ALPHABET // no 0/O/1/I to avoid mix-ups
         var code: String? = null
         for (attempt in 1..6) {
-            val candidate = (1..6).map { alphabet[Random.nextInt(alphabet.length)] }.joinToString("")
+            val candidate = (1..TripRules.CODE_LENGTH).map { alphabet[Random.nextInt(alphabet.length)] }.joinToString("")
             val existing = db.collection("trips").document(candidate).get().await()
             if (!existing.exists()) {
                 code = candidate
@@ -69,28 +141,6 @@ object TripRepository {
         return finalCode
     }
 
-    /** Returns true if a trip with this code exists. */
-    suspend fun tripExists(code: String): Boolean {
-        return db.collection("trips").document(code.uppercase()).get().await().exists()
-    }
-
-    /** One-shot fetch of a trip's display name — used right after joining by code, before any
-     *  live listener is open, so the homepage's trip-index entry has a real name from the start. */
-    suspend fun getGroupName(code: String): String {
-        val doc = db.collection("trips").document(code.uppercase()).get().await()
-        return doc.getString("groupName") ?: "Our trip"
-    }
-
-    /** One-shot fetch of a trip's name and status together — used wherever the homepage's
-     *  per-user index entry needs a fresh snapshot (join by code, or reopening a trip) without
-     *  waiting on a live listener. */
-    suspend fun getTripMeta(code: String): TripMeta {
-        val doc = db.collection("trips").document(code.uppercase()).get().await()
-        return TripMeta(
-            groupName = doc.getString("groupName") ?: "Our trip",
-            status = runCatching { TripStatus.valueOf(doc.getString("status") ?: "") }.getOrDefault(TripStatus.ONGOING)
-        )
-    }
 
     /** Adds a member with the given display name and returns their memberId. Used both for a
      *  registered user joining themselves (passing their own [uid], so this trip shows up on
@@ -128,24 +178,20 @@ object TripRepository {
             .await()
     }
 
+    // Every live listener below ignores an error event instead of emitting an empty list: before,
+    // one failed snapshot (a network blip, a permission problem) wiped members, expenses or
+    // suggestions off every screen, which looked exactly like "nothing was saved or shared".
+
     fun observeMembers(code: String): Flow<List<Member>> = callbackFlow {
         val reg = db.collection("trips").document(code.uppercase())
             .collection("members")
             .orderBy("joinedAt", Query.Direction.ASCENDING)
-            .addSnapshotListener { snap, _ ->
-                val members = snap?.documents?.map {
-                    Member(
-                        id = it.id,
-                        name = it.getString("name") ?: "",
-                        role = runCatching { MemberRole.valueOf(it.getString("role") ?: "") }
-                            .getOrDefault(MemberRole.JOINER),
-                        phone = it.getString("phone") ?: "",
-                        email = it.getString("email") ?: "",
-                        uid = it.getString("uid"),
-                        upiId = it.getString("upiId") ?: ""
-                    )
-                } ?: emptyList()
-                trySend(members)
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) {
+                    Log.w(TAG, "members listener for $code failed", error)
+                    return@addSnapshotListener
+                }
+                trySend(snap.documents.map { docToMember(it) })
             }
         awaitClose { reg.remove() }
     }
@@ -153,14 +199,17 @@ object TripRepository {
     /** Live-observes the trip's own metadata document (group name, ongoing/completed status). */
     fun observeTripMeta(code: String): Flow<TripMeta> = callbackFlow {
         val reg = db.collection("trips").document(code.uppercase())
-            .addSnapshotListener { snap, _ ->
-                trySend(
-                    TripMeta(
-                        groupName = snap?.getString("groupName") ?: "",
-                        status = runCatching { TripStatus.valueOf(snap?.getString("status") ?: "") }
-                            .getOrDefault(TripStatus.ONGOING)
-                    )
-                )
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) {
+                    Log.w(TAG, "trip listener for $code failed", error)
+                    return@addSnapshotListener
+                }
+                if (!snap.exists()) {
+                    // Only trust "gone" when the server says so; a cold cache can't tell.
+                    if (!snap.metadata.isFromCache) trySend(TripMeta(exists = false))
+                    return@addSnapshotListener
+                }
+                trySend(metaOf(snap))
             }
         awaitClose { reg.remove() }
     }
@@ -203,8 +252,12 @@ object TripRepository {
      *  per-phone local-only copy so the Organizer's edits sync to every joiner. */
     fun observeRoutePlan(code: String): Flow<RoutePlan> = callbackFlow {
         val reg = db.collection("trips").document(code.uppercase())
-            .addSnapshotListener { snap, _ ->
-                trySend(mapToRoutePlan(snap?.get("routePlan") as? Map<*, *>))
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) {
+                    Log.w(TAG, "route listener for $code failed", error)
+                    return@addSnapshotListener
+                }
+                trySend(mapToRoutePlan(snap.get("routePlan") as? Map<*, *>))
             }
         awaitClose { reg.remove() }
     }
@@ -213,6 +266,15 @@ object TripRepository {
         db.collection("trips").document(code.uppercase())
             .update("routePlan", routePlanToMap(plan))
             .await()
+    }
+
+    /** Same write as [updateRoutePlan] without waiting for the server: Firestore queues it on the
+     *  device and delivers it on its own. Used when leaving the Route tab mid-edit, where waiting
+     *  is impossible because the screen (and its coroutines) are already going away. */
+    fun saveRoutePlanNow(code: String, plan: RoutePlan) {
+        db.collection("trips").document(code.uppercase())
+            .update("routePlan", routePlanToMap(plan))
+            .addOnFailureListener { Log.w(TAG, "route save for $code failed", it) }
     }
 
     private fun routePlanToMap(plan: RoutePlan): Map<String, Any?> = mapOf(
@@ -254,8 +316,12 @@ object TripRepository {
         val reg = db.collection("trips").document(code.uppercase())
             .collection("itineraryDays")
             .orderBy("order", Query.Direction.ASCENDING)
-            .addSnapshotListener { snap, _ ->
-                trySend(snap?.documents?.map { docToItineraryDay(it) } ?: emptyList())
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) {
+                    Log.w(TAG, "itinerary listener for $code failed", error)
+                    return@addSnapshotListener
+                }
+                trySend(snap.documents.map { docToItineraryDay(it) })
             }
         awaitClose { reg.remove() }
     }
@@ -353,18 +419,32 @@ object TripRepository {
         source = runCatching { StopSource.valueOf(map["source"] as? String ?: "") }.getOrDefault(StopSource.MANUAL)
     )
 
-    suspend fun updateGroupName(code: String, groupName: String) {
+    /** Renames the trip, and refreshes the name in the caller's own homepage list straight away.
+     *  Other members' lists pick the new name up the next time they open the trip. */
+    suspend fun updateGroupName(code: String, groupName: String, myUid: String?) {
+        val name = groupName.trim().ifBlank { "Our trip" }
         db.collection("trips").document(code.uppercase())
-            .update("groupName", groupName.ifBlank { "Our trip" })
+            .update("groupName", name)
             .await()
+        if (myUid != null) {
+            runCatching {
+                db.collection("users").document(myUid).collection("trips").document(code.uppercase())
+                    .update("tripName", name)
+                    .await()
+            }
+        }
     }
 
     fun observeExpenses(code: String): Flow<List<Expense>> = callbackFlow {
         val reg = db.collection("trips").document(code.uppercase())
             .collection("expenses")
             .orderBy("createdAt", Query.Direction.DESCENDING)
-            .addSnapshotListener { snap, _ ->
-                val expenses = snap?.documents?.map { doc ->
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) {
+                    Log.w(TAG, "expenses listener for $code failed", error)
+                    return@addSnapshotListener
+                }
+                val expenses = snap.documents.map { doc ->
                     fun doubleMap(field: String) = (doc.get(field) as? Map<*, *>)
                         ?.entries
                         ?.mapNotNull { (k, v) ->
@@ -385,7 +465,7 @@ object TripRepository {
                         splitPercentages = doubleMap("splitPercentages"),
                         createdAtMillis = doc.getLong("createdAt") ?: 0L
                     )
-                } ?: emptyList()
+                }
                 trySend(expenses)
             }
         awaitClose { reg.remove() }
@@ -489,8 +569,12 @@ object TripRepository {
         val reg = db.collection("trips").document(code.uppercase())
             .collection(subcollection)
             .orderBy("createdAt", Query.Direction.DESCENDING)
-            .addSnapshotListener { snap, _ ->
-                val items = snap?.documents?.map { doc ->
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) {
+                    Log.w(TAG, "$subcollection listener for $code failed", error)
+                    return@addSnapshotListener
+                }
+                val items = snap.documents.map { doc ->
                     build(
                         doc.id,
                         doc.getString("authorMemberId") ?: "",
@@ -500,7 +584,7 @@ object TripRepository {
                             .getOrDefault(SuggestionStatus.PENDING),
                         doc.getLong("createdAt") ?: 0L
                     )
-                } ?: emptyList()
+                }
                 trySend(items)
             }
         awaitClose { reg.remove() }
@@ -543,22 +627,25 @@ object TripRepository {
      *  document path. */
     suspend fun upsertUserProfile(uid: String, name: String, email: String, phone: String) {
         db.collection("users").document(uid)
-            .set(mapOf("name" to name, "email" to email, "phone" to phone), SetOptions.merge())
+            .set(mapOf("name" to name, "email" to email.trim().lowercase(), "phone" to phone), SetOptions.merge())
             .await()
     }
 
-    /** Looks up a registered account by email, then by phone (first match wins) — single-field
-     *  queries only, so no Firestore composite index is needed. Null if neither matches anyone,
-     *  which is the normal case for a travel companion who's never used the app. */
+    /** Looks up a registered account by email, then by phone (first match wins). Phone numbers are
+     *  matched in every common way they get typed ("98765 43210", "098765...", "+91 98765...") and
+     *  emails case-insensitively; before, only an exact character-for-character match was found, so
+     *  most real companions were never linked. Single-field `in` queries, so no composite index is
+     *  needed. Null if nothing matches, the normal case for a companion who's never used the app. */
     suspend fun findUserProfile(email: String, phone: String): UserProfile? {
         val trimmedEmail = email.trim()
         if (trimmedEmail.isNotBlank()) {
-            db.collection("users").whereEqualTo("email", trimmedEmail).limit(1).get().await()
+            val variants = listOf(trimmedEmail, trimmedEmail.lowercase()).distinct()
+            db.collection("users").whereIn("email", variants).limit(1).get().await()
                 .documents.firstOrNull()?.let { return docToUserProfile(it) }
         }
-        val trimmedPhone = phone.trim()
-        if (trimmedPhone.isNotBlank()) {
-            db.collection("users").whereEqualTo("phone", trimmedPhone).limit(1).get().await()
+        val phoneVariants = TripRules.phoneVariants(phone)
+        if (phoneVariants.isNotEmpty()) {
+            db.collection("users").whereIn("phone", phoneVariants).limit(1).get().await()
                 .documents.firstOrNull()?.let { return docToUserProfile(it) }
         }
         return null
@@ -571,14 +658,18 @@ object TripRepository {
         phone = doc.getString("phone") ?: ""
     )
 
-    /** The signed-in user's 5 most recently accessed trips, newest first. */
+    /** All of the signed-in user's trips, most recently opened first. (This used to stop at 5, which
+     *  made a sixth-oldest trip unreachable from the homepage.) */
     fun observeMyTrips(uid: String): Flow<List<TripSummary>> = callbackFlow {
         val reg = db.collection("users").document(uid)
             .collection("trips")
             .orderBy("lastAccessedAt", Query.Direction.DESCENDING)
-            .limit(5)
-            .addSnapshotListener { snap, _ ->
-                val trips = snap?.documents?.map { doc ->
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) {
+                    Log.w(TAG, "my-trips listener for $uid failed", error)
+                    return@addSnapshotListener
+                }
+                val trips = snap.documents.map { doc ->
                     TripSummary(
                         tripCode = doc.getString("tripCode") ?: doc.id,
                         tripName = doc.getString("tripName") ?: "",
@@ -589,7 +680,7 @@ object TripRepository {
                         status = runCatching { TripStatus.valueOf(doc.getString("status") ?: "") }
                             .getOrDefault(TripStatus.ONGOING)
                     )
-                } ?: emptyList()
+                }
                 trySend(trips)
             }
         awaitClose { reg.remove() }

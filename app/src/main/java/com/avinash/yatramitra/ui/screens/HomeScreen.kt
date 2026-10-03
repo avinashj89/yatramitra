@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -14,10 +15,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.avinash.yatramitra.data.AuthRepository
 import com.avinash.yatramitra.data.LocalStore
+import com.avinash.yatramitra.data.TripLookup
 import com.avinash.yatramitra.data.TripRepository
+import com.avinash.yatramitra.data.TripRules
 import com.avinash.yatramitra.model.MemberRole
 import com.avinash.yatramitra.model.TripStatus
 import com.avinash.yatramitra.model.TripSummary
@@ -26,20 +31,23 @@ import com.avinash.yatramitra.ui.components.ProfileSheet
 import com.avinash.yatramitra.ui.components.YatraMitraLogo
 import com.avinash.yatramitra.ui.theme.Spacing
 import com.avinash.yatramitra.ui.util.launchSafely
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
-/** Lands here after signing in whenever no trip is open. Lists your 5 most recent trips — the
- *  Organizer reopens an ongoing one fully editable, same as right after creating it; everyone
- *  else (or anyone once it's marked Completed) gets a read-only view — and lets you start a new
- *  one or join an existing one by code. */
+/** Lands here after signing in whenever no trip is open. Lists all your trips, most recent first,
+ *  and lets you start a new one or join an existing one by code. Whether an opened trip is
+ *  editable is decided live inside the trip from its status (see TripRules), not here. */
 @Composable
 fun HomeScreen(
-    onOpenTrip: (session: LocalStore.Session, isReadOnly: Boolean) -> Unit,
+    onOpenTrip: (session: LocalStore.Session) -> Unit,
     onSignOut: () -> Unit,
     pendingJoinCode: String? = null,
-    onJoinCodeHandled: () -> Unit = {}
+    onJoinCodeHandled: () -> Unit = {},
+    /** A one-off message to show on arrival, e.g. that the trip you were in was just deleted. */
+    notice: String? = null,
+    onNoticeShown: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     val uid = AuthRepository.currentUserId
@@ -63,6 +71,13 @@ fun HomeScreen(
         }
     }
 
+    LaunchedEffect(notice) {
+        if (notice != null) {
+            error = notice
+            onNoticeShown()
+        }
+    }
+
     // A yatramitra://join?code=XXXXXX tap (from the "Invite" share action) lands here instead of
     // asking the user to type the code in by hand.
     LaunchedEffect(pendingJoinCode) {
@@ -74,23 +89,95 @@ fun HomeScreen(
     }
 
     fun openExisting(summary: TripSummary) {
+        if (uid == null) return
+        val label = summary.tripName.ifBlank { summary.tripCode }
+        error = null
+        loading = true
+        // Every failure here is caught: before, any network error while opening a trip from this
+        // list was thrown out of the coroutine and crashed the whole app.
         scope.launch {
-            if (uid == null) return@launch
-            if (!TripRepository.tripExists(summary.tripCode)) {
-                // Someone deleted this trip since it was last opened — drop the stale pointer
-                // from just this user's own index (that's all a non-owner is allowed to touch)
-                // instead of navigating into a trip that no longer exists.
-                TripRepository.removeMyTripEntry(uid, summary.tripCode)
-                error = "\"${summary.tripName.ifBlank { summary.tripCode }}\" was deleted and is no longer available."
-                return@launch
+            try {
+                when (val found = TripRepository.lookupTrip(summary.tripCode)) {
+                    is TripLookup.NotFound -> {
+                        // Deleted since it was last opened: drop the stale pointer from this user's
+                        // own list (the only one they're allowed to change).
+                        runCatching { TripRepository.removeMyTripEntry(uid, summary.tripCode) }
+                        error = "\"$label\" was deleted and is no longer available."
+                    }
+                    is TripLookup.Unreachable -> error = "Couldn't open \"$label\": ${found.reason}."
+                    is TripLookup.Found -> {
+                        var memberId = summary.memberId
+                        var role = summary.role
+                        if (!found.fromCache) {
+                            // Repair entries older versions got wrong: joining your own trip by code
+                            // on a second phone re-pointed this entry at a new group-member place,
+                            // which made the Organizer's own trip uneditable everywhere.
+                            val mine = runCatching { TripRepository.findMemberByUid(summary.tripCode, uid) }.getOrNull()
+                            if (mine != null && TripRules.shouldAdoptMember(mine, summary.role)) {
+                                memberId = mine.id
+                                role = mine.role
+                            }
+                            // Refresh the entry with the trip's current name and status (this used to
+                            // write the old name back every time, so renames never showed here).
+                            runCatching {
+                                TripRepository.recordTripAccess(
+                                    uid, summary.tripCode, found.meta.groupName, memberId, role, found.meta.status
+                                )
+                            }
+                        }
+                        onOpenTrip(LocalStore.Session(summary.tripCode, memberId, myName))
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = "Couldn't open \"$label\": ${e.message ?: "unexpected error"}."
+            } finally {
+                loading = false
             }
-            // Re-fetch status fresh rather than trusting the (possibly stale) homepage index
-            // entry: this is exactly what decides whether the Organizer gets edit access back,
-            // so a status change made from another device must take effect immediately.
-            val meta = TripRepository.getTripMeta(summary.tripCode)
-            val readOnly = meta.status == TripStatus.COMPLETED || summary.role != MemberRole.ORGANIZER
-            TripRepository.recordTripAccess(uid, summary.tripCode, summary.tripName, summary.memberId, summary.role, meta.status)
-            onOpenTrip(LocalStore.Session(summary.tripCode, summary.memberId, myName), readOnly)
+        }
+    }
+
+    fun joinByCode(rawInput: String) {
+        if (uid == null) return
+        val code = TripRules.extractTripCode(rawInput)
+        if (code == null) {
+            error = "\"${rawInput.trim()}\" isn't a trip code. Codes are 6 letters and numbers, like 7F3K9Q."
+            return
+        }
+        error = null
+        loading = true
+        scope.launch {
+            try {
+                when (val found = TripRepository.lookupTrip(code)) {
+                    is TripLookup.NotFound -> error = if (TripRules.hasImpossibleCharacters(code)) {
+                        "No trip has the code $code. Trip codes never contain 0, O, 1 or I, so one of those was probably mistyped."
+                    } else {
+                        "No trip found with the code $code. Ask the organiser to check the code, or to send the invite again."
+                    }
+                    is TripLookup.Unreachable -> error = "Couldn't check the code $code: ${found.reason}."
+                    is TripLookup.Found -> {
+                        if (found.fromCache) {
+                            error = "You're offline. Connect to the internet to join a trip."
+                            return@launch
+                        }
+                        // Reuse this account's existing place on the trip if it has one: joining
+                        // again used to add a duplicate member, and the Organizer opening their own
+                        // code on a second phone was demoted to a group member there.
+                        val existing = TripRepository.findMemberByUid(code, uid)
+                        val memberId = existing?.id ?: TripRepository.joinTrip(code, myName, role = MemberRole.JOINER, uid = uid)
+                        val role = existing?.role ?: MemberRole.JOINER
+                        TripRepository.recordTripAccess(uid, code, found.meta.groupName, memberId, role, found.meta.status)
+                        onOpenTrip(LocalStore.Session(code, memberId, myName))
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = "Couldn't join: ${e.message ?: "check your internet connection and try again"}."
+            } finally {
+                loading = false
+            }
         }
     }
 
@@ -103,7 +190,7 @@ fun HomeScreen(
                 val code = TripRepository.createTrip(groupName = name)
                 val memberId = TripRepository.joinTrip(code, myName, role = MemberRole.ORGANIZER, uid = uid)
                 TripRepository.recordTripAccess(uid, code, name, memberId, MemberRole.ORGANIZER)
-                onOpenTrip(LocalStore.Session(code, memberId, myName), false)
+                onOpenTrip(LocalStore.Session(code, memberId, myName))
             } catch (e: Exception) {
                 error = "Couldn't create the trip — check your internet connection and try again."
             } finally {
@@ -328,40 +415,36 @@ fun HomeScreen(
             onDismissRequest = { showJoinDialog = false; joinCodeInput = "" },
             title = { Text("Join a trip") },
             text = {
-                OutlinedTextField(
-                    value = joinCodeInput,
-                    onValueChange = { joinCodeInput = it.uppercase() },
-                    label = { Text("Trip code") },
-                    placeholder = { Text("e.g. 7F3K9Q") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedTextField(
+                        value = joinCodeInput,
+                        onValueChange = { joinCodeInput = it.uppercase() },
+                        label = { Text("Trip code") },
+                        placeholder = { Text("e.g. 7F3K9Q") },
+                        singleLine = true,
+                        // No autocorrect: keyboards were free to "fix" a code into a different word.
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Characters,
+                            autoCorrect = false,
+                            keyboardType = KeyboardType.Ascii
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        "You can also paste the whole invite message.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val trimmed = joinCodeInput.trim()
-                        if (trimmed.isBlank() || uid == null) return@TextButton
+                        val input = joinCodeInput
+                        if (input.isBlank() || uid == null) return@TextButton
                         showJoinDialog = false
                         joinCodeInput = ""
-                        error = null
-                        loading = true
-                        scope.launch {
-                            try {
-                                if (!TripRepository.tripExists(trimmed)) {
-                                    error = "No trip found with that code."
-                                } else {
-                                    val meta = TripRepository.getTripMeta(trimmed)
-                                    val memberId = TripRepository.joinTrip(trimmed, myName, role = MemberRole.JOINER, uid = uid)
-                                    TripRepository.recordTripAccess(uid, trimmed, meta.groupName, memberId, MemberRole.JOINER, meta.status)
-                                    onOpenTrip(LocalStore.Session(trimmed.uppercase(), memberId, myName), false)
-                                }
-                            } catch (e: Exception) {
-                                error = "Couldn't join — check your internet connection and try again."
-                            } finally {
-                                loading = false
-                            }
-                        }
+                        joinByCode(input)
                     },
                     enabled = joinCodeInput.isNotBlank()
                 ) { Text("Join") }

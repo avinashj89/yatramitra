@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.avinash.yatramitra.data.LocalStore
 import com.avinash.yatramitra.data.TripRepository
+import com.avinash.yatramitra.data.TripRules
 import com.avinash.yatramitra.model.ItineraryDay
 import com.avinash.yatramitra.model.ItinerarySuggestion
 import com.avinash.yatramitra.model.ItineraryStop
@@ -101,7 +102,7 @@ fun ItineraryScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
-                GroupMemberReadOnlyBanner(isOrganizer = isOrganizer)
+                GroupMemberReadOnlyBanner(tripCompleted = isReadOnly)
             }
         }
 
@@ -122,10 +123,13 @@ fun ItineraryScreen(
             if (canEdit) {
                 AssistChip(
                     onClick = {
+                        // Numbered past the highest existing day: after deleting a day in the
+                        // middle, counting the days used to give a second "Day 3".
+                        val order = TripRules.nextDayOrder(days)
                         val newDay = ItineraryDay(
                             id = UUID.randomUUID().toString(),
-                            label = "Day ${days.size + 1}",
-                            order = days.size
+                            label = "Day ${order + 1}",
+                            order = order
                         )
                         persistDay(newDay)
                         selectedDayId = newDay.id
@@ -138,20 +142,21 @@ fun ItineraryScreen(
 
         Spacer(Modifier.height(Spacing.xs))
 
-        if (selectedDay == null) {
-            Box(modifier = Modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.TopCenter) {
-                Text(
-                    if (canEdit) "Tap \"Add day\" to start your itinerary." else "The Organizer hasn't added any days yet.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(20.dp, 0.dp, 20.dp, 100.dp),
-                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
-            ) {
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(20.dp, 0.dp, 20.dp, 100.dp),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            if (selectedDay == null) {
+                item {
+                    Text(
+                        if (canEdit) "Tap \"Add day\" to start your itinerary." else "The Organizer hasn't added any days yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = Spacing.sm)
+                    )
+                }
+            } else {
                 item {
                     DayHeaderRow(
                         day = selectedDay,
@@ -200,36 +205,44 @@ fun ItineraryScreen(
                         }
                     }
                 }
+            }
 
-                item {
-                    ItinerarySuggestionsCard(
-                        isOrganizer = isOrganizer,
-                        isReadOnly = isReadOnly,
-                        suggestions = suggestions,
-                        currentMemberId = session.memberId,
-                        suggestionText = suggestionText,
-                        onSuggestionTextChange = { suggestionText = it },
-                        onSubmit = {
-                            val text = suggestionText.trim()
-                            if (text.isNotBlank()) {
-                                scope.launchSafely(onError, "Couldn't send your suggestion — check your internet connection.") {
-                                    TripRepository.addItinerarySuggestion(session.tripCode, session.memberId, currentMemberName, text)
-                                    suggestionText = ""
-                                }
-                            }
-                        },
-                        onAccept = { id ->
-                            scope.launchSafely(onError, "Couldn't accept that suggestion — check your internet connection.") {
-                                TripRepository.updateItinerarySuggestionStatus(session.tripCode, id, SuggestionStatus.ACCEPTED)
-                            }
-                        },
-                        onDismiss = { id ->
-                            scope.launchSafely(onError, "Couldn't dismiss that suggestion — check your internet connection.") {
-                                TripRepository.updateItinerarySuggestionStatus(session.tripCode, id, SuggestionStatus.DISMISSED)
+            // Always shown: it used to appear only once a day existed, so before the Organizer
+            // added the first day, group members had nowhere to suggest anything.
+            item {
+                ItinerarySuggestionsCard(
+                    isOrganizer = isOrganizer,
+                    isReadOnly = isReadOnly,
+                    suggestions = suggestions,
+                    currentMemberId = session.memberId,
+                    suggestionText = suggestionText,
+                    onSuggestionTextChange = { suggestionText = it },
+                    onSubmit = {
+                        val text = suggestionText.trim()
+                        if (text.isNotBlank()) {
+                            suggestionText = ""
+                            scope.launchSafely(
+                                onError = { message ->
+                                    if (suggestionText.isBlank()) suggestionText = text
+                                    onError(message)
+                                },
+                                errorMessage = "Couldn't send your suggestion — check your internet connection."
+                            ) {
+                                TripRepository.addItinerarySuggestion(session.tripCode, session.memberId, currentMemberName, text)
                             }
                         }
-                    )
-                }
+                    },
+                    onAccept = { id ->
+                        scope.launchSafely(onError, "Couldn't accept that suggestion — check your internet connection.") {
+                            TripRepository.updateItinerarySuggestionStatus(session.tripCode, id, SuggestionStatus.ACCEPTED)
+                        }
+                    },
+                    onDismiss = { id ->
+                        scope.launchSafely(onError, "Couldn't dismiss that suggestion — check your internet connection.") {
+                            TripRepository.updateItinerarySuggestionStatus(session.tripCode, id, SuggestionStatus.DISMISSED)
+                        }
+                    }
+                )
             }
         }
     }
@@ -243,7 +256,7 @@ fun ItineraryScreen(
                 val newStops = if (existingIndex >= 0) {
                     selectedDay.stops.toMutableList().apply { set(existingIndex, stop) }
                 } else {
-                    selectedDay.stops + stop.copy(order = selectedDay.stops.size)
+                    selectedDay.stops + stop.copy(order = (selectedDay.stops.maxOfOrNull { it.order } ?: -1) + 1)
                 }
                 persistDay(selectedDay.copy(stops = newStops))
                 showStopDialog = false
@@ -253,7 +266,7 @@ fun ItineraryScreen(
 }
 
 @Composable
-private fun GroupMemberReadOnlyBanner(isOrganizer: Boolean) {
+private fun GroupMemberReadOnlyBanner(tripCompleted: Boolean) {
     Row(
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
@@ -270,12 +283,16 @@ private fun GroupMemberReadOnlyBanner(isOrganizer: Boolean) {
         )
         Column {
             Text(
-                if (isOrganizer) "Read-only" else "Role: Group Member (read-only)",
+                if (tripCompleted) "Completed trip (read-only)" else "Role: Group Member",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold
             )
             Text(
-                if (isOrganizer) "You're viewing this past trip in read-only mode." else "Only the Organizer can edit the itinerary. Suggest changes below.",
+                if (tripCompleted) {
+                    "This trip is marked completed, so the itinerary is locked. The Organizer can reopen it from the ⋮ menu."
+                } else {
+                    "Only the Organizer can edit the itinerary. Suggest changes below."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -367,16 +384,20 @@ private fun ItinerarySuggestionsCard(
     onAccept: (String) -> Unit,
     onDismiss: (String) -> Unit
 ) {
-    val visibleSuggestions = if (isOrganizer) suggestions else suggestions.filter { it.authorMemberId == currentMemberId }
+    // Everyone on the trip sees every suggestion (see the same fix on the Route tab).
+    val visibleSuggestions = suggestions
 
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Icon(Icons.Filled.QuestionAnswer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Text(
-                if (isOrganizer) "Group Member schedule suggestions" else "Suggest a timing or activity change",
-                style = MaterialTheme.typography.titleMedium
-            )
+            Text("Group Member schedule suggestions", style = MaterialTheme.typography.titleMedium)
         }
+        Text(
+            if (isReadOnly) "This trip is completed, so new suggestions are closed."
+            else "Everyone on this trip sees these. The Organizer can accept or dismiss them.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         if (!isReadOnly) {
             ElevatedCard {
@@ -401,7 +422,7 @@ private fun ItinerarySuggestionsCard(
 
         if (visibleSuggestions.isEmpty()) {
             Text(
-                if (isOrganizer) "No suggestions yet." else "Your suggestions to the Organizer will appear here.",
+                "No suggestions yet.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -415,7 +436,10 @@ private fun ItinerarySuggestionsCard(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(suggestion.authorName, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (suggestion.authorMemberId == currentMemberId) "${suggestion.authorName} (you)" else suggestion.authorName,
+                            fontWeight = FontWeight.Bold
+                        )
                         Text(
                             when (suggestion.status) {
                                 SuggestionStatus.PENDING -> "Pending"

@@ -30,16 +30,16 @@ private enum class AuthMode { SIGN_IN, SIGN_UP }
  *  would be stuck looking at a broken screen with no way to reach the fix. A screen this early
  *  and this critical is safer pinned to one known-good, tested appearance. */
 @Composable
-fun AuthScreen(onAuthenticated: () -> Unit) {
+fun AuthScreen(onAuthenticated: () -> Unit, startAtVerification: Boolean = false) {
     YatraMitraTheme(darkTheme = false) {
         Surface(color = MaterialTheme.colorScheme.background) {
-            AuthScreenContent(onAuthenticated)
+            AuthScreenContent(onAuthenticated, startAtVerification)
         }
     }
 }
 
 @Composable
-private fun AuthScreenContent(onAuthenticated: () -> Unit) {
+private fun AuthScreenContent(onAuthenticated: () -> Unit, startAtVerification: Boolean) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -56,7 +56,9 @@ private fun AuthScreenContent(onAuthenticated: () -> Unit) {
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    var needsEmailVerification by remember { mutableStateOf(false) }
+    // Starts true when the app was reopened by an email account that never verified: closing the
+    // app on the "Verify your email" screen used to skip verification entirely on the next launch.
+    var needsEmailVerification by remember { mutableStateOf(startAtVerification) }
     var showForgotPassword by remember { mutableStateOf(false) }
     var resetSent by remember { mutableStateOf(false) }
 

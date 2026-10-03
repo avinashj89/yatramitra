@@ -135,7 +135,9 @@ enum class TripStatus { ONGOING, COMPLETED }
 /** Trip-level metadata that lives on the Firestore trip document itself (not a subcollection). */
 data class TripMeta(
     val groupName: String = "",
-    val status: TripStatus = TripStatus.ONGOING
+    val status: TripStatus = TripStatus.ONGOING,
+    /** False once the server confirms the trip document is gone (someone deleted the trip). */
+    val exists: Boolean = true
 )
 
 enum class SuggestionStatus { PENDING, ACCEPTED, DISMISSED }

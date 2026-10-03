@@ -46,6 +46,7 @@ import com.avinash.yatramitra.data.LocalStore
 import com.avinash.yatramitra.data.PlacesRepository
 import com.avinash.yatramitra.data.RouteRepository
 import com.avinash.yatramitra.data.TripRepository
+import com.avinash.yatramitra.data.TripRules
 import com.avinash.yatramitra.model.BreakUnit
 import com.avinash.yatramitra.model.Member
 import com.avinash.yatramitra.model.MemberRole
@@ -54,6 +55,7 @@ import com.avinash.yatramitra.model.RoutePlan
 import com.avinash.yatramitra.model.RoutePreference
 import com.avinash.yatramitra.model.RouteSuggestion
 import com.avinash.yatramitra.model.SuggestionStatus
+import com.avinash.yatramitra.model.TripStatus
 import com.avinash.yatramitra.ui.components.InitialsAvatar
 import com.avinash.yatramitra.ui.theme.Spacing
 import com.avinash.yatramitra.ui.util.launchSafely
@@ -102,13 +104,25 @@ fun TripPlannerScreen(
         }
     }
 
+    // The newest edit that hasn't been handed to Firestore yet (saves wait for a pause in typing).
+    var unsavedPlan by remember { mutableStateOf<RoutePlan?>(null) }
+
     fun updatePlan(new: RoutePlan) {
         plan = new
+        unsavedPlan = new
         saveJob?.cancel()
         saveJob = scope.launchSafely(onError, "Couldn't save your changes — check your internet connection.") {
             delay(400) // debounce: avoid a Firestore write on every keystroke
+            unsavedPlan = null
             TripRepository.updateRoutePlan(session.tripCode, new)
         }
+    }
+
+    // Leaving the tab (or the trip) within that pause used to throw the last edit away, because the
+    // waiting save was cancelled along with the screen.
+    val latestUnsaved by rememberUpdatedState(unsavedPlan)
+    DisposableEffect(session.tripCode) {
+        onDispose { latestUnsaved?.let { TripRepository.saveRoutePlanNow(session.tripCode, it) } }
     }
 
     LaunchedEffect(plan.from, plan.toStops) {
@@ -127,7 +141,7 @@ fun TripPlannerScreen(
     if (!loaded) return
 
     val isOrganizer = currentRole == MemberRole.ORGANIZER
-    val canEdit = isOrganizer && !isReadOnly
+    val canEdit = TripRules.canEditPlan(currentRole, if (isReadOnly) TripStatus.COMPLETED else TripStatus.ONGOING)
     val currentMemberName = members.find { it.id == session.memberId }?.name ?: session.memberName
     val hasRoute = plan.from.isNotBlank() && plan.toStops.any { it.isNotBlank() }
 
@@ -187,7 +201,7 @@ fun TripPlannerScreen(
                 pitstopMessage = pitstopMessage
             )
         } else {
-            ReadOnlyRouteCard(plan = plan, groupName = groupName)
+            ReadOnlyRouteCard(plan = plan, groupName = groupName, tripCompleted = isReadOnly)
         }
 
         HorizontalDivider()
@@ -222,9 +236,17 @@ fun TripPlannerScreen(
             onSubmit = {
                 val text = suggestionText.trim()
                 if (text.isNotBlank()) {
-                    scope.launchSafely(onError, "Couldn't send your suggestion — check your internet connection.") {
+                    // Clear straight away: the post shows in the list at once, and the box used to
+                    // keep the text until the server answered, inviting a second tap (a duplicate).
+                    suggestionText = ""
+                    scope.launchSafely(
+                        onError = { message ->
+                            if (suggestionText.isBlank()) suggestionText = text
+                            onError(message)
+                        },
+                        errorMessage = "Couldn't send your suggestion — check your internet connection."
+                    ) {
                         TripRepository.addRouteSuggestion(session.tripCode, session.memberId, currentMemberName, text)
-                        suggestionText = ""
                     }
                 }
             },
@@ -349,7 +371,7 @@ private fun OrganizerRouteForm(plan: RoutePlan, onPlanChange: (RoutePlan) -> Uni
 }
 
 @Composable
-private fun ReadOnlyRouteCard(plan: RoutePlan, groupName: String) {
+private fun ReadOnlyRouteCard(plan: RoutePlan, groupName: String, tripCompleted: Boolean) {
     val validStops = plan.toStops.map { it.trim() }.filter { it.isNotBlank() }
     ElevatedCard {
         Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
@@ -367,7 +389,11 @@ private fun ReadOnlyRouteCard(plan: RoutePlan, groupName: String) {
                 )
             }
             Text(
-                "Only the Organizer can change the route. You can propose changes below.",
+                if (tripCompleted) {
+                    "This trip is marked completed, so the route is locked. The Organizer can reopen it from the ⋮ menu."
+                } else {
+                    "Only the Organizer can change the route. You can suggest changes below."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -784,6 +810,11 @@ private fun TripMembersCard(
                                 // version of this code ran the lookup first without this guard, so
                                 // any failure here silently blocked the add entirely.
                                 val match = runCatching { TripRepository.findUserProfile(trimmedEmail, trimmedPhone) }.getOrNull()
+                                val alreadyOnTrip = match?.let { m -> members.firstOrNull { it.uid == m.uid } }
+                                if (alreadyOnTrip != null) {
+                                    onError("${alreadyOnTrip.name} is already on this trip.")
+                                    return@launchSafely
+                                }
                                 val memberId = TripRepository.joinTrip(
                                     session.tripCode,
                                     name,
@@ -793,6 +824,9 @@ private fun TripMembersCard(
                                     uid = match?.uid
                                 )
                                 if (match != null) {
+                                    // Puts the trip on their homepage. Needs the updated
+                                    // firestore.rules (creating an entry in someone else's list);
+                                    // under the old rules this was silently refused.
                                     runCatching {
                                         TripRepository.recordTripAccess(match.uid, session.tripCode, groupName, memberId, MemberRole.JOINER)
                                     }
@@ -826,16 +860,22 @@ private fun RouteSuggestionsCard(
     onAccept: (String) -> Unit,
     onDismiss: (String) -> Unit
 ) {
-    val visibleSuggestions = if (isOrganizer) suggestions else suggestions.filter { it.authorMemberId == currentMemberId }
+    // Everyone on the trip sees every suggestion. This list used to be filtered on each phone to
+    // only the viewer's own posts, so a suggestion was saved and synced but never shown to the
+    // other group members (and the Organizer's notes never reached anyone).
+    val visibleSuggestions = suggestions
 
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Icon(Icons.Filled.QuestionAnswer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Text(
-                if (isOrganizer) "Group Member change suggestions" else "Suggest a change to the Organizer",
-                style = MaterialTheme.typography.titleMedium
-            )
+            Text("Group Member change suggestions", style = MaterialTheme.typography.titleMedium)
         }
+        Text(
+            if (isReadOnly) "This trip is completed, so new suggestions are closed."
+            else "Everyone on this trip sees these. The Organizer can accept or dismiss them.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         if (!isReadOnly) {
             ElevatedCard {
@@ -860,7 +900,7 @@ private fun RouteSuggestionsCard(
 
         if (visibleSuggestions.isEmpty()) {
             Text(
-                if (isOrganizer) "No suggestions yet." else "Your suggestions to the Organizer will appear here.",
+                "No suggestions yet.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -874,7 +914,10 @@ private fun RouteSuggestionsCard(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(suggestion.authorName, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (suggestion.authorMemberId == currentMemberId) "${suggestion.authorName} (you)" else suggestion.authorName,
+                            fontWeight = FontWeight.Bold
+                        )
                         Text(
                             when (suggestion.status) {
                                 SuggestionStatus.PENDING -> "Pending"

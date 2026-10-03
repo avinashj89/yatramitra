@@ -3,6 +3,7 @@ package com.avinash.yatramitra
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -32,6 +34,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -46,11 +49,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -70,6 +76,7 @@ import com.avinash.yatramitra.data.LocalStore
 import com.avinash.yatramitra.data.ThemeMode
 import com.avinash.yatramitra.data.ThemePreference
 import com.avinash.yatramitra.data.TripRepository
+import com.avinash.yatramitra.data.TripRules
 import com.avinash.yatramitra.model.Member
 import com.avinash.yatramitra.model.MemberRole
 import com.avinash.yatramitra.model.TripStatus
@@ -151,15 +158,24 @@ private val destinations = listOf(
 )
 
 /** Not signed in -> [AuthScreen]. Signed in, no trip open -> [HomeScreen]. Trip open -> the
- *  3-tab [TripScaffold]. A trip opened from the homepage's recent-trips list is always read-only,
- *  regardless of role — freshly creating or joining one opens it fully editable as before. */
+ *  3-tab [TripScaffold]. How editable an open trip is depends only on its live status and your
+ *  role in it (see [TripRules]), never on how it was opened. */
 @Composable
 fun YatraMitraApp(pendingJoinCode: String? = null, onJoinCodeHandled: () -> Unit = {}) {
     var authChecked by remember { mutableStateOf(false) }
     var signedIn by remember { mutableStateOf(false) }
+    var mustVerifyEmail by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        signedIn = AuthRepository.isSignedIn
+        if (AuthRepository.isSignedIn && !AuthRepository.isEmailVerified) {
+            // An email account that closed the app on the "Verify your email" screen used to walk
+            // straight in on the next launch. The cached flag can be stale, so ask the server first.
+            val verified = runCatching { AuthRepository.reloadAndCheckVerified() }.getOrDefault(false)
+            mustVerifyEmail = !verified
+            signedIn = verified
+        } else {
+            signedIn = AuthRepository.isSignedIn
+        }
         authChecked = true
     }
 
@@ -186,7 +202,10 @@ fun YatraMitraApp(pendingJoinCode: String? = null, onJoinCodeHandled: () -> Unit
     if (!authChecked) return
 
     if (!signedIn) {
-        AuthScreen(onAuthenticated = { signedIn = true })
+        AuthScreen(
+            onAuthenticated = { mustVerifyEmail = false; signedIn = true },
+            startAtVerification = mustVerifyEmail
+        )
     } else {
         SignedInApp(
             pendingJoinCode = pendingJoinCode,
@@ -199,35 +218,44 @@ fun YatraMitraApp(pendingJoinCode: String? = null, onJoinCodeHandled: () -> Unit
     }
 }
 
-private data class ActiveTrip(val session: LocalStore.Session, val isReadOnly: Boolean)
+/** Keeps the open trip across screen rotation and dark-mode switches, which recreate the activity
+ *  and used to drop you back on the homepage. */
+private val SessionSaver = listSaver<LocalStore.Session?, String>(
+    save = { s -> if (s == null) emptyList() else listOf(s.tripCode, s.memberId, s.memberName) },
+    restore = { list -> if (list.size == 3) LocalStore.Session(list[0], list[1], list[2]) else null }
+)
 
 @Composable
 private fun SignedInApp(pendingJoinCode: String?, onJoinCodeHandled: () -> Unit, onSignedOut: () -> Unit) {
-    var activeTrip by remember { mutableStateOf<ActiveTrip?>(null) }
+    var activeTrip by rememberSaveable(stateSaver = SessionSaver) { mutableStateOf<LocalStore.Session?>(null) }
+    var homeNotice by remember { mutableStateOf<String?>(null) }
 
     val current = activeTrip
     if (current == null) {
         HomeScreen(
-            onOpenTrip = { session, readOnly -> activeTrip = ActiveTrip(session, readOnly) },
+            onOpenTrip = { session -> homeNotice = null; activeTrip = session },
             onSignOut = onSignedOut,
             pendingJoinCode = pendingJoinCode,
-            onJoinCodeHandled = onJoinCodeHandled
+            onJoinCodeHandled = onJoinCodeHandled,
+            notice = homeNotice,
+            onNoticeShown = { homeNotice = null }
         )
     } else {
-        TripScaffold(
-            session = current.session,
-            isReadOnly = current.isReadOnly,
-            onHome = { activeTrip = null },
-            onSignedOut = onSignedOut
-        )
+        // key(): a different trip gets fresh state (tabs, listeners) instead of the previous trip's.
+        key(current.tripCode) {
+            TripScaffold(
+                session = current,
+                onHome = { notice -> homeNotice = notice; activeTrip = null },
+                onSignedOut = onSignedOut
+            )
+        }
     }
 }
 
 @Composable
 private fun TripScaffold(
     session: LocalStore.Session,
-    isReadOnly: Boolean,
-    onHome: () -> Unit,
+    onHome: (notice: String?) -> Unit,
     onSignedOut: () -> Unit
 ) {
     val context = LocalContext.current
@@ -235,43 +263,86 @@ private fun TripScaffold(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     var members by remember { mutableStateOf<List<Member>>(emptyList()) }
+    var membersLoaded by remember { mutableStateOf(false) }
     var groupName by remember { mutableStateOf("") }
     var tripStatus by remember { mutableStateOf(TripStatus.ONGOING) }
+    var metaLoaded by remember { mutableStateOf(false) }
     var showProfile by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(session.tripCode) {
-        launch { TripRepository.observeMembers(session.tripCode).collect { members = it } }
+        launch {
+            TripRepository.observeMembers(session.tripCode).collect {
+                members = it
+                membersLoaded = true
+            }
+        }
         launch {
             TripRepository.observeTripMeta(session.tripCode).collect {
+                if (!it.exists) {
+                    // Someone deleted the trip while it was open here: leave instead of showing an
+                    // empty trip whose every save fails.
+                    onHome("\"${groupName.ifBlank { session.tripCode }}\" has been deleted.")
+                    return@collect
+                }
                 groupName = it.groupName
                 tripStatus = it.status
+                metaLoaded = true
             }
+        }
+    }
+
+    // The phone's Back button: first back to the Route tab, then out of the trip to the homepage.
+    // Before, there was no handler at all, so Back closed the whole app from inside a trip.
+    BackHandler {
+        val startRoute = destinations.first().route
+        val currentRoute = navController.currentDestination?.route // null while the trip is still loading
+        if (currentRoute != null && currentRoute != startRoute) {
+            navController.navigate(startRoute) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+        } else {
+            onHome(null)
         }
     }
 
     val currentRole = members.find { it.id == session.memberId }?.role ?: MemberRole.JOINER
     val isOrganizer = currentRole == MemberRole.ORGANIZER
+    // Live, not decided once when the trip was opened: the trip stays editable until the Organizer
+    // marks it completed, and locks (or unlocks again) on every phone the moment that changes.
+    val isReadOnly = TripRules.isReadOnly(tripStatus)
     val canMarkCompleted = isOrganizer && tripStatus == TripStatus.ONGOING
+    val canReopen = isOrganizer && tripStatus == TripStatus.COMPLETED
     val canDeleteTrip = tripStatus == TripStatus.COMPLETED || (tripStatus == TripStatus.ONGOING && isOrganizer)
     val onError: (String) -> Unit = { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
+
+    fun setStatus(status: TripStatus) {
+        scope.launchSafely(onError, "Couldn't update the trip — check your internet connection.") {
+            TripRepository.updateTripStatus(session.tripCode, status)
+            // Keep this phone's homepage badge in step too (other phones refresh theirs on next open).
+            AuthRepository.currentUserId?.let { uid ->
+                runCatching {
+                    TripRepository.recordTripAccess(uid, session.tripCode, groupName, session.memberId, currentRole, status)
+                }
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
             TripTopBar(
                 role = currentRole,
                 memberName = session.memberName,
-                isReadOnly = isReadOnly,
                 tripStatus = tripStatus,
                 canMarkCompleted = canMarkCompleted,
+                canReopen = canReopen,
                 canDeleteTrip = canDeleteTrip,
-                onHome = onHome,
+                onHome = { onHome(null) },
                 onAvatarClick = { showProfile = true },
-                onMarkCompleted = {
-                    scope.launchSafely(onError, "Couldn't update the trip — check your internet connection.") {
-                        TripRepository.updateTripStatus(session.tripCode, TripStatus.COMPLETED)
-                    }
-                },
+                onMarkCompleted = { setStatus(TripStatus.COMPLETED) },
+                onReopen = { setStatus(TripStatus.ONGOING) },
                 onDeleteTrip = { showDeleteConfirm = true },
                 onInvite = {
                     val send = Intent(Intent.ACTION_SEND).apply {
@@ -313,6 +384,14 @@ private fun TripScaffold(
             }
         }
     ) { innerPadding ->
+        if (!membersLoaded || !metaLoaded) {
+            // Wait for your role and the trip's status before drawing the tabs; otherwise the
+            // Organizer briefly saw the Group Member (no editing) version of every screen.
+            Box(Modifier.fillMaxSize().padding(innerPadding), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            return@Scaffold
+        }
         NavHost(
             navController = navController,
             startDestination = "route-and-stops",
@@ -369,7 +448,7 @@ private fun TripScaffold(
                         showDeleteConfirm = false
                         scope.launchSafely(onError, "Couldn't delete the trip — check your internet connection.") {
                             TripRepository.deleteTrip(session.tripCode, AuthRepository.currentUserId)
-                            onHome()
+                            onHome(null)
                         }
                     }
                 ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
@@ -380,19 +459,20 @@ private fun TripScaffold(
 }
 
 /** Shown above every tab once inside a trip: brand, a non-destructive Home action, an Invite
- *  action, the current member's avatar, their role badge (or a Read-only badge when browsing a
- *  past trip from the homepage), and a live-sync indicator. */
+ *  action, the current member's avatar, their role badge (or a Completed badge once the trip is
+ *  locked), and a live-sync indicator. */
 @Composable
 private fun TripTopBar(
     role: MemberRole,
     memberName: String,
-    isReadOnly: Boolean,
     tripStatus: TripStatus,
     canMarkCompleted: Boolean,
+    canReopen: Boolean,
     canDeleteTrip: Boolean,
     onHome: () -> Unit,
     onAvatarClick: () -> Unit,
     onMarkCompleted: () -> Unit,
+    onReopen: () -> Unit,
     onDeleteTrip: () -> Unit,
     onInvite: () -> Unit
 ) {
@@ -430,7 +510,7 @@ private fun TripTopBar(
                 )
                 Spacer(Modifier.width(Spacing.xs))
                 InitialsAvatar(name = memberName, size = 32.dp, modifier = Modifier.clickable(onClick = onAvatarClick))
-                if (canMarkCompleted || canDeleteTrip) {
+                if (canMarkCompleted || canReopen || canDeleteTrip) {
                     Box {
                         IconButton(onClick = { showMenu = true }) {
                             Icon(Icons.Filled.MoreVert, contentDescription = "Trip options")
@@ -440,6 +520,13 @@ private fun TripTopBar(
                                 DropdownMenuItem(
                                     text = { Text("Mark as completed") },
                                     onClick = { showMenu = false; onMarkCompleted() }
+                                )
+                            }
+                            if (canReopen) {
+                                // Without this, marking a trip completed by mistake locked it forever.
+                                DropdownMenuItem(
+                                    text = { Text("Reopen trip for editing") },
+                                    onClick = { showMenu = false; onReopen() }
                                 )
                             }
                             if (canDeleteTrip) {
@@ -465,8 +552,7 @@ private fun TripTopBar(
                 label = {
                     Text(
                         when {
-                            tripStatus == TripStatus.COMPLETED -> "Completed"
-                            isReadOnly -> "Read-only"
+                            tripStatus == TripStatus.COMPLETED -> "Completed · read-only"
                             role == MemberRole.ORGANIZER -> "Organizer View"
                             else -> "Group Member View"
                         }
