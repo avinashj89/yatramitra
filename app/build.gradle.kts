@@ -1,7 +1,19 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.gms.google-services")
+}
+
+// Google place search key. Kept out of the repository: put MAPS_API_KEY=... in local.properties
+// (git-ignored) or in the MAPS_API_KEY environment variable. Without it the app searches
+// OpenStreetMap exactly as before.
+val mapsApiKey: String = run {
+    val props = Properties()
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { props.load(it) }
+    (props.getProperty("MAPS_API_KEY") ?: System.getenv("MAPS_API_KEY") ?: "").trim()
 }
 
 android {
@@ -14,6 +26,7 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+        buildConfigField("String", "MAPS_API_KEY", "\"" + mapsApiKey.replace("\"", "") + "\"")
     }
 
     // A debug keystore committed to the repo (app/debug.keystore) rather than relying on Android
@@ -50,6 +63,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {

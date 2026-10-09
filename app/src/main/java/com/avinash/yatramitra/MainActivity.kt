@@ -86,6 +86,7 @@ import com.google.android.gms.common.GooglePlayServicesNotAvailableException
 import com.google.android.gms.common.GooglePlayServicesRepairableException
 import com.google.android.gms.security.ProviderInstaller
 import com.avinash.yatramitra.data.AuthRepository
+import com.avinash.yatramitra.data.GooglePlaces
 import com.avinash.yatramitra.data.LocalStore
 import com.avinash.yatramitra.data.ThemeMode
 import com.avinash.yatramitra.data.ThemePreference
@@ -130,6 +131,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         ThemePreference.init(applicationContext)
         Notifications.createChannel(applicationContext)
+        // Google place search, only when a key was built in; otherwise OpenStreetMap as before.
+        GooglePlaces.configure(applicationContext)
         pendingJoinCode = joinCodeFrom(intent)
         // Only on a fresh start: after a rotation the same intent would reopen the trip again.
         if (savedInstanceState == null) pendingOpen = openRequestFrom(intent)

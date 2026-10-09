@@ -62,6 +62,7 @@ import com.avinash.yatramitra.model.Member
 import com.avinash.yatramitra.model.MemberRole
 import com.avinash.yatramitra.model.Place
 import com.avinash.yatramitra.model.PlaceSearchResult
+import com.avinash.yatramitra.model.PlaceSource
 import com.avinash.yatramitra.model.RouteDay
 import com.avinash.yatramitra.model.RoutePlan
 import com.avinash.yatramitra.model.RoutePreference
@@ -426,6 +427,7 @@ private fun OrganizerRouteForm(
                             onDayChange(day.copy(toStops = updated))
                         },
                         onMessage = onMessage,
+                        near = day.from,
                         modifier = Modifier.weight(1f)
                     )
                     if (day.toStops.size > 1) {
@@ -1031,7 +1033,9 @@ private fun AutocompletePlaceField(
     onValueChange: (Place) -> Unit,
     onMessage: (String) -> Unit,
     modifier: Modifier = Modifier,
-    allowCurrentLocation: Boolean = false
+    allowCurrentLocation: Boolean = false,
+    /** Results close to this place come first (each To is searched near that day's From). */
+    near: Place? = null
 ) {
     val context = LocalContext.current
     var results by remember { mutableStateOf<List<PlaceSearchResult>>(emptyList()) }
@@ -1082,7 +1086,7 @@ private fun AutocompletePlaceField(
                         delay(400) // debounce: wait for a pause in typing before searching
                         busy = true
                         val found = try {
-                            PlaceSearch.search(new)
+                            PlaceSearch.search(new, near?.let { PlaceRules.usableLocation(it, System.currentTimeMillis()) })
                         } finally {
                             busy = false
                         }
@@ -1166,6 +1170,13 @@ private fun AutocompletePlaceField(
                         }
                         if (i < shown.lastIndex) HorizontalDivider()
                     }
+                    // Both services require saying where results come from.
+                    Text(
+                        if (shown.firstOrNull()?.source == PlaceSource.GOOGLE) "Powered by Google" else "Results © OpenStreetMap contributors",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.End).padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
                 }
             }
         }
