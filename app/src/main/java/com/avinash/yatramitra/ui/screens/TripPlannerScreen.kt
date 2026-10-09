@@ -232,9 +232,12 @@ fun TripPlannerScreen(
                 plan = plan,
                 onPlanChange = ::updatePlan,
                 dayNumber = dayNumber,
+                dayPitstopsOn = activeDay.pitstopsEnabled,
+                onDayPitstopsChange = { on -> updatePlan(RoutePlans.updateDay(plan, activeIndex, activeDay.copy(pitstopsEnabled = on))) },
+                totalDays = plan.days.size,
                 computedPitstops = dayPitstops,
                 findingPitstops = findingPitstops,
-                enabled = plan.pitstopsEnabled && hasRoute && plan.breakEvery.toDoubleOrNull() != null,
+                enabled = activeDay.pitstopsEnabled && hasRoute && plan.breakEvery.toDoubleOrNull() != null,
                 hasRoute = hasRoute,
                 onGeneratePitstops = { sendDayToItinerary(withPitstops = true) },
                 onAddToItinerary = { sendDayToItinerary(withPitstops = false) },
@@ -523,6 +526,9 @@ private fun PitstopEngineCard(
     plan: RoutePlan,
     onPlanChange: (RoutePlan) -> Unit,
     dayNumber: Int,
+    dayPitstopsOn: Boolean,
+    onDayPitstopsChange: (Boolean) -> Unit,
+    totalDays: Int,
     computedPitstops: List<RouteRepository.Pitstop>,
     findingPitstops: Boolean,
     enabled: Boolean,
@@ -545,20 +551,27 @@ private fun PitstopEngineCard(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("Suggest pitstops for this trip", style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            "Turn off if your group doesn't want any breaks suggested along the route.",
+                            if (totalDays > 1) "Suggest pitstops on Day $dayNumber" else "Suggest pitstops for this trip",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                        Text(
+                            if (totalDays > 1) {
+                                "Each day has its own switch, so a sightseeing day can skip breaks while the long drives keep them."
+                            } else {
+                                "Turn off if your group doesn't want any breaks suggested along the route."
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Switch(
-                        checked = plan.pitstopsEnabled,
-                        onCheckedChange = { onPlanChange(plan.copy(pitstopsEnabled = it)) }
+                        checked = dayPitstopsOn,
+                        onCheckedChange = onDayPitstopsChange
                     )
                 }
 
-                if (!plan.pitstopsEnabled) {
+                if (!dayPitstopsOn) {
                     // Without pitstops there was no way to get the route into the Itinerary at all.
                     OutlinedButton(
                         onClick = onAddToItinerary,
@@ -572,6 +585,14 @@ private fun PitstopEngineCard(
                 }
 
                 HorizontalDivider()
+
+                if (totalDays > 1) {
+                    Text(
+                        "Break settings below are shared by every day that has pitstops on.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
                 Text(
                     "Break calculation mode",

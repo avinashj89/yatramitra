@@ -31,26 +31,24 @@ enum class RoutePreference { FASTEST, SURPRISE }
  *  arbitrary but reasonable starting point, not a meaningful "recommended" set. */
 val DEFAULT_PITSTOP_CATEGORIES = setOf("Temples & Spiritual", "Dhabas & Highway Food", "Heritage & Forts")
 
-/** One day's drive on the Route tab: where that day starts, up to 4 "To" stops in order, and
- *  whether that day ends back where it started. */
+/** One day's drive on the Route tab: where that day starts, up to 4 "To" stops in order,
+ *  whether that day ends back where it started, and whether pitstops are suggested on that day
+ *  (a sightseeing day may want none while the long drive days do). */
 data class RouteDay(
     val from: String = "",
     val toStops: List<String> = listOf(""), // 1 to 4 entries
-    val roundTrip: Boolean = false
+    val roundTrip: Boolean = false,
+    val pitstopsEnabled: Boolean = true
 )
 
 /** The route-planning form: one [RouteDay] per day of the trip (Day 1, Day 2, ...), plus the
- *  pitstop settings shared by every day. The trip's display name lives only on
+ *  break settings shared by every day. The trip's display name lives only on
  *  [TripMeta.groupName]. */
 data class RoutePlan(
     val days: List<RouteDay> = listOf(RouteDay()), // never empty
     val breakEvery: String = "",       // free-typed number, kept as String for easy text-field binding
     val breakUnit: BreakUnit = BreakUnit.HOURS,
     val routePreference: RoutePreference = RoutePreference.FASTEST,
-    /** Whether the group wants pitstops suggested at all — off is a first-class, easy choice, not
-     *  just "leave the break amount blank" (which used to just leave the Generate button stuck
-     *  disabled with no explanation). */
-    val pitstopsEnabled: Boolean = true,
     /** Which kinds of places (temples, food, forts, fuel, viewpoints...) the pitstop search should
      *  actually look for — previously collected in the UI but never sent anywhere, so changing
      *  these had no effect on the generated stops. */

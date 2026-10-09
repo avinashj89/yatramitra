@@ -91,13 +91,41 @@ class RoutePlansTest {
     @Test
     fun `saving and loading keeps every day and setting`() {
         val plan = RoutePlan(
-            days = listOf(day1, RouteDay(from = "Madikeri", toStops = listOf("Bengaluru"), roundTrip = true)),
+            days = listOf(day1, RouteDay(from = "Madikeri", toStops = listOf("Bengaluru"), roundTrip = true, pitstopsEnabled = false)),
             breakEvery = "2",
             breakUnit = BreakUnit.KM,
-            pitstopsEnabled = false,
             pitstopCategories = setOf("Scenic Viewpoints")
         )
         assertEquals(plan, RoutePlans.fromMap(RoutePlans.toMap(plan)))
+    }
+
+    @Test
+    fun `pitstops can be off on one day and on for the others`() {
+        val plan = RoutePlan(days = listOf(day1, RouteDay(from = "Madikeri", pitstopsEnabled = false), RouteDay(from = "Hassan")))
+        val loaded = RoutePlans.fromMap(RoutePlans.toMap(plan))
+        assertEquals(listOf(true, false, true), loaded.days.map { it.pitstopsEnabled })
+    }
+
+    @Test
+    fun `a trip saved with the old trip-wide switch keeps it on every day`() {
+        val old = mapOf(
+            "days" to listOf(mapOf("from" to "A", "toStops" to listOf("B")), mapOf("from" to "B", "toStops" to listOf("C"))),
+            "pitstopsEnabled" to false
+        )
+        assertEquals(listOf(false, false), RoutePlans.fromMap(old).days.map { it.pitstopsEnabled })
+        assertEquals(listOf(true), RoutePlans.fromMap(mapOf("from" to "A")).days.map { it.pitstopsEnabled })
+    }
+
+    @Test
+    fun `older app versions read day 1's pitstop switch`() {
+        val map = RoutePlans.toMap(RoutePlan(days = listOf(day1.copy(pitstopsEnabled = false), RouteDay(from = "X"))))
+        assertEquals(false, map["pitstopsEnabled"])
+    }
+
+    @Test
+    fun `a new day starts with pitstops on, whatever the day before had`() {
+        val plan = RoutePlans.addDay(RoutePlan(days = listOf(day1.copy(pitstopsEnabled = false))))
+        assertTrue(plan.days[1].pitstopsEnabled)
     }
 
     @Test

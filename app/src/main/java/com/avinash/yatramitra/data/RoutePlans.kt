@@ -46,7 +46,9 @@ object RoutePlans {
     fun toMap(plan: RoutePlan): Map<String, Any?> {
         val first = plan.days.firstOrNull() ?: RouteDay()
         return mapOf(
-            "days" to plan.days.map { mapOf("from" to it.from, "toStops" to it.toStops, "roundTrip" to it.roundTrip) },
+            "days" to plan.days.map {
+                mapOf("from" to it.from, "toStops" to it.toStops, "roundTrip" to it.roundTrip, "pitstopsEnabled" to it.pitstopsEnabled)
+            },
             // Day 1 is also written in the old single-day fields, so a phone still running an
             // older version of the app keeps showing at least Day 1 instead of an empty route.
             "from" to first.from,
@@ -55,16 +57,20 @@ object RoutePlans {
             "breakEvery" to plan.breakEvery,
             "breakUnit" to plan.breakUnit.name,
             "routePreference" to plan.routePreference.name,
-            "pitstopsEnabled" to plan.pitstopsEnabled,
+            // Older app versions had one trip-wide switch; they get Day 1's.
+            "pitstopsEnabled" to first.pitstopsEnabled,
             "pitstopCategories" to plan.pitstopCategories.toList()
         )
     }
 
     fun fromMap(map: Map<*, *>?): RoutePlan {
         if (map == null) return RoutePlan()
-        val savedDays = (map["days"] as? List<*>)?.mapNotNull { (it as? Map<*, *>)?.let(::dayFromMap) }
+        // Before pitstops could be switched per day there was one trip-wide switch: days saved
+        // then (which have no switch of their own) take that value.
+        val tripWidePitstops = map["pitstopsEnabled"] as? Boolean ?: true
+        val savedDays = (map["days"] as? List<*>)?.mapNotNull { (it as? Map<*, *>)?.let { d -> dayFromMap(d, tripWidePitstops) } }
         // Trips saved before routes had days keep their single route as Day 1.
-        val days = savedDays?.takeIf { it.isNotEmpty() } ?: listOf(dayFromMap(map))
+        val days = savedDays?.takeIf { it.isNotEmpty() } ?: listOf(dayFromMap(map, tripWidePitstops))
         val pitstopCategories = (map["pitstopCategories"] as? List<*>)
             ?.filterIsInstance<String>()?.toSet()
             ?: DEFAULT_PITSTOP_CATEGORIES
@@ -75,14 +81,14 @@ object RoutePlans {
                 .getOrDefault(BreakUnit.HOURS),
             routePreference = runCatching { RoutePreference.valueOf(map["routePreference"] as? String ?: "") }
                 .getOrDefault(RoutePreference.FASTEST),
-            pitstopsEnabled = map["pitstopsEnabled"] as? Boolean ?: true,
             pitstopCategories = pitstopCategories
         )
     }
 
-    private fun dayFromMap(map: Map<*, *>): RouteDay = RouteDay(
+    private fun dayFromMap(map: Map<*, *>, defaultPitstops: Boolean): RouteDay = RouteDay(
         from = map["from"] as? String ?: "",
         toStops = (map["toStops"] as? List<*>)?.filterIsInstance<String>()?.ifEmpty { null } ?: listOf(""),
-        roundTrip = map["roundTrip"] as? Boolean ?: false
+        roundTrip = map["roundTrip"] as? Boolean ?: false,
+        pitstopsEnabled = map["pitstopsEnabled"] as? Boolean ?: defaultPitstops
     )
 }

@@ -37,23 +37,29 @@ export function millis(v: unknown): number {
 const status = (v: unknown): TripStatus => (v === "COMPLETED" ? "COMPLETED" : "ONGOING");
 const role = (v: unknown): MemberRole => (v === "ORGANIZER" ? "ORGANIZER" : "JOINER");
 
-function routeDay(d: Data): RouteDay {
+function routeDay(d: Data, defaultPitstops: boolean): RouteDay {
   const toStops = strList(d.toStops);
-  return { from: str(d.from), toStops: toStops.length > 0 ? toStops : [""], roundTrip: bool(d.roundTrip, false) };
+  return {
+    from: str(d.from),
+    toStops: toStops.length > 0 ? toStops : [""],
+    roundTrip: bool(d.roundTrip, false),
+    pitstopsEnabled: bool(d.pitstopsEnabled, defaultPitstops),
+  };
 }
 
 /** Mirrors RoutePlans.fromMap: multi-day routes, or an older single route as Day 1. */
 export function parseRoutePlan(raw: unknown): RoutePlan | null {
   if (!raw || typeof raw !== "object") return null;
   const d = raw as Data;
+  // Older trips had one trip-wide pitstop switch; their days inherit it.
+  const tripWide = bool(d.pitstopsEnabled, true);
   const savedDays = Array.isArray(d.days)
-    ? d.days.filter((x): x is Data => !!x && typeof x === "object").map(routeDay)
+    ? d.days.filter((x): x is Data => !!x && typeof x === "object").map((x) => routeDay(x, tripWide))
     : [];
   return {
-    days: savedDays.length > 0 ? savedDays : [routeDay(d)],
+    days: savedDays.length > 0 ? savedDays : [routeDay(d, tripWide)],
     breakEvery: str(d.breakEvery),
     breakUnit: d.breakUnit === "KM" ? "KM" : "HOURS",
-    pitstopsEnabled: bool(d.pitstopsEnabled, true),
     pitstopCategories: strList(d.pitstopCategories),
   };
 }

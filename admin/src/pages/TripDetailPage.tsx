@@ -145,6 +145,7 @@ function Overview({ trip, detail }: { trip: Trip; detail: ReturnType<typeof useT
                       <LoopIcon fontSize="inherit" color="secondary" />
                     </Tooltip>
                   )}
+                  {!day.pitstopsEnabled && <Chip size="small" label="No pitstops" variant="outlined" className="ml-1" />}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   {[day.from || "Start not set", ...day.toStops.filter(Boolean), ...(day.roundTrip && day.from ? [day.from] : [])].join("  →  ")}
@@ -153,8 +154,11 @@ function Overview({ trip, detail }: { trip: Trip; detail: ReturnType<typeof useT
             ))}
             <Divider />
             <Typography variant="body2" color="text.secondary">
-              Pitstops: {plan.pitstopsEnabled ? `every ${plan.breakEvery || "?"} ${plan.breakUnit === "KM" ? "km" : "hours"}` : "off"}
-              {plan.pitstopsEnabled && plan.pitstopCategories.length > 0 && ` · ${plan.pitstopCategories.join(", ")}`}
+              {plan.days.some((day) => day.pitstopsEnabled)
+                ? `Pitstops every ${plan.breakEvery || "?"} ${plan.breakUnit === "KM" ? "km" : "hours"}${
+                    plan.pitstopCategories.length > 0 ? ` · ${plan.pitstopCategories.join(", ")}` : ""
+                  }`
+                : "Pitstops off on every day"}
             </Typography>
           </div>
         )}

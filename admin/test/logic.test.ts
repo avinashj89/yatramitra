@@ -57,8 +57,8 @@ describe("parsing Firestore documents", () => {
     });
     expect(trip.status).toBe("COMPLETED");
     expect(trip.routePlan?.days).toEqual([
-      { from: "A", toStops: ["B"], roundTrip: true },
-      { from: "B", toStops: [""], roundTrip: false },
+      { from: "A", toStops: ["B"], roundTrip: true, pitstopsEnabled: true },
+      { from: "B", toStops: [""], roundTrip: false, pitstopsEnabled: true },
     ]);
     expect(trip.routePlan?.breakUnit).toBe("KM");
   });
@@ -67,8 +67,9 @@ describe("parsing Firestore documents", () => {
     const trip = parseTrip("X", { routePlan: { from: "Pune", toStops: ["Goa"], roundTrip: false } });
     expect(trip.groupName).toBe("Our trip");
     expect(trip.status).toBe("ONGOING");
-    expect(trip.routePlan?.days).toEqual([{ from: "Pune", toStops: ["Goa"], roundTrip: false }]);
-    expect(trip.routePlan?.pitstopsEnabled).toBe(true);
+    expect(trip.routePlan?.days).toEqual([{ from: "Pune", toStops: ["Goa"], roundTrip: false, pitstopsEnabled: true }]);
+    const oldOff = parseTrip("Y", { routePlan: { days: [{ from: "A" }, { from: "B", pitstopsEnabled: true }], pitstopsEnabled: false } });
+    expect(oldOff.routePlan?.days.map((d) => d.pitstopsEnabled)).toEqual([false, true]);
     expect(parseRoutePlan(undefined)).toBeNull();
   });
 

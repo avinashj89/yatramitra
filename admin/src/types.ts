@@ -8,13 +8,14 @@ export interface RouteDay {
   from: string;
   toStops: string[];
   roundTrip: boolean;
+  /** Pitstops are switched on or off per day. */
+  pitstopsEnabled: boolean;
 }
 
 export interface RoutePlan {
   days: RouteDay[];
   breakEvery: string;
   breakUnit: "KM" | "HOURS";
-  pitstopsEnabled: boolean;
   pitstopCategories: string[];
 }
 

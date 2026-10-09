@@ -21,18 +21,18 @@ function build(now: number) {
       code: "CRG7K2", groupName: "Coorg monsoon weekend", status: "ONGOING", createdAt: now - 12 * DAY, startedAt: now - 2 * DAY, startedBy: "Asha Rao",
       routePlan: {
         days: [
-          { from: "Bengaluru", toStops: ["Mysuru", "Madikeri"], roundTrip: false },
-          { from: "Madikeri", toStops: ["Abbey Falls", "Raja's Seat"], roundTrip: true },
-          { from: "Madikeri", toStops: ["Bengaluru"], roundTrip: false },
+          { from: "Bengaluru", toStops: ["Mysuru", "Madikeri"], roundTrip: false, pitstopsEnabled: true },
+          { from: "Madikeri", toStops: ["Abbey Falls", "Raja's Seat"], roundTrip: true, pitstopsEnabled: false },
+          { from: "Madikeri", toStops: ["Bengaluru"], roundTrip: false, pitstopsEnabled: true },
         ],
-        breakEvery: "2", breakUnit: "HOURS", pitstopsEnabled: true, pitstopCategories: ["Dhabas & Highway Food"],
+        breakEvery: "2", breakUnit: "HOURS", pitstopCategories: ["Dhabas & Highway Food"],
       },
     },
     {
       code: "GOA4X9", groupName: "Goa with college gang", status: "ONGOING", createdAt: now - 6 * DAY, startedAt: 0, startedBy: "",
-      routePlan: { days: [{ from: "Pune", toStops: ["Panaji"], roundTrip: false }], breakEvery: "100", breakUnit: "KM", pitstopsEnabled: true, pitstopCategories: [] },
+      routePlan: { days: [{ from: "Pune", toStops: ["Panaji"], roundTrip: false, pitstopsEnabled: true }], breakEvery: "100", breakUnit: "KM", pitstopCategories: [] },
     },
-    { code: "HMP3Q8", groupName: "Hampi heritage trail", status: "COMPLETED", createdAt: now - 28 * DAY, startedAt: now - 24 * DAY, startedBy: "Meera Iyer", routePlan: { days: [{ from: "Bengaluru", toStops: ["Hampi"], roundTrip: true }], breakEvery: "", breakUnit: "HOURS", pitstopsEnabled: false, pitstopCategories: [] } },
+    { code: "HMP3Q8", groupName: "Hampi heritage trail", status: "COMPLETED", createdAt: now - 28 * DAY, startedAt: now - 24 * DAY, startedBy: "Meera Iyer", routePlan: { days: [{ from: "Bengaluru", toStops: ["Hampi"], roundTrip: true, pitstopsEnabled: false }], breakEvery: "", breakUnit: "HOURS", pitstopCategories: [] } },
     { code: "OTY8M5", groupName: "Ooty family drive", status: "ONGOING", createdAt: now - 3 * DAY, startedAt: 0, startedBy: "", routePlan: null },
     { code: "WYD2T6", groupName: "Wayanad office offsite", status: "ONGOING", createdAt: now - 1 * DAY, startedAt: 0, startedBy: "", routePlan: null },
   ];
