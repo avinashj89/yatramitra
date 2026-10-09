@@ -31,12 +31,45 @@ enum class RoutePreference { FASTEST, SURPRISE }
  *  arbitrary but reasonable starting point, not a meaningful "recommended" set. */
 val DEFAULT_PITSTOP_CATEGORIES = setOf("Temples & Spiritual", "Dhabas & Highway Food", "Heritage & Forts")
 
+/** Where a route place came from: typed by hand (name only), picked from a search, or the phone's
+ *  own position. */
+enum class PlaceSource { TYPED, OPENSTREETMAP, GOOGLE, CURRENT_LOCATION }
+
+/**
+ * A From/To place. Saving the exact location (not just a name) is what lets "House of Commons,
+ * Jayanagar 5th Block" or "my current location" survive into distances, pitstops and the Google
+ * Maps hand-off; before, only the name was kept and was searched again later, which only ever
+ * found the surrounding area.
+ */
+data class Place(
+    val name: String = "",
+    /** The rest of the address, shown under the name. */
+    val address: String = "",
+    val lat: Double? = null,
+    val lng: Double? = null,
+    /** Google's ID for the place, when it was picked from a Google search. */
+    val placeId: String? = null,
+    val source: PlaceSource = PlaceSource.TYPED,
+    /** When [lat]/[lng] were looked up (Google lets apps keep its coordinates for 30 days). */
+    val locatedAtMillis: Long = 0L
+)
+
+/** One row of the From/To search dropdown. Google results have no coordinates until picked. */
+data class PlaceSearchResult(
+    val title: String,
+    val subtitle: String,
+    val source: PlaceSource,
+    val lat: Double? = null,
+    val lng: Double? = null,
+    val placeId: String? = null
+)
+
 /** One day's drive on the Route tab: where that day starts, up to 4 "To" stops in order,
  *  whether that day ends back where it started, and whether pitstops are suggested on that day
  *  (a sightseeing day may want none while the long drive days do). */
 data class RouteDay(
-    val from: String = "",
-    val toStops: List<String> = listOf(""), // 1 to 4 entries
+    val from: Place = Place(),
+    val toStops: List<Place> = listOf(Place()), // 1 to 4 entries
     val roundTrip: Boolean = false,
     val pitstopsEnabled: Boolean = true
 )

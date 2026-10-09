@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -26,6 +28,7 @@ import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.QuestionAnswer
 import androidx.compose.material.icons.filled.Restaurant
@@ -42,10 +45,14 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.avinash.yatramitra.data.LocalStore
-import com.avinash.yatramitra.data.PlacesRepository
+import com.avinash.yatramitra.data.CurrentLocation
+import com.avinash.yatramitra.data.PlaceRules
+import com.avinash.yatramitra.data.PlaceSearch
 import com.avinash.yatramitra.data.RoutePlans
 import com.avinash.yatramitra.data.RouteRepository
 import com.avinash.yatramitra.data.TripRepository
@@ -53,7 +60,8 @@ import com.avinash.yatramitra.data.TripRules
 import com.avinash.yatramitra.model.BreakUnit
 import com.avinash.yatramitra.model.Member
 import com.avinash.yatramitra.model.MemberRole
-import com.avinash.yatramitra.model.PlaceSuggestion
+import com.avinash.yatramitra.model.Place
+import com.avinash.yatramitra.model.PlaceSearchResult
 import com.avinash.yatramitra.model.RouteDay
 import com.avinash.yatramitra.model.RoutePlan
 import com.avinash.yatramitra.model.RoutePreference
@@ -61,6 +69,7 @@ import com.avinash.yatramitra.model.TripStatus
 import com.avinash.yatramitra.ui.components.InitialsAvatar
 import com.avinash.yatramitra.ui.theme.Spacing
 import com.avinash.yatramitra.ui.util.launchSafely
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -129,13 +138,13 @@ fun TripPlannerScreen(
     val dayNumber = activeIndex + 1
 
     LaunchedEffect(activeDay.from, activeDay.toStops, activeDay.roundTrip) {
-        val names = RoutePlans.placesInOrder(activeDay)
-        if (names.size < 2) {
+        val places = RoutePlans.placesInOrder(activeDay)
+        if (places.size < 2) {
             routeInfo = null
         } else {
             delay(500) // debounce: wait for a pause before hitting the free geocode/route APIs
             routeLoading = true
-            routeInfo = RouteRepository.fetchRouteSummary(names)
+            routeInfo = RouteRepository.fetchRouteSummary(places)
             routeLoading = false
         }
     }
@@ -169,7 +178,7 @@ fun TripPlannerScreen(
                 val pitstops = if (withPitstops) {
                     val breakValue = plan.breakEvery.toDoubleOrNull()
                     RouteRepository.suggestPitstops(
-                        orderedPlaceNames = RoutePlans.placesInOrder(day),
+                        orderedPlaces = RoutePlans.placesInOrder(day),
                         breakEveryKm = if (plan.breakUnit == BreakUnit.KM) breakValue else null,
                         breakEveryHours = if (plan.breakUnit == BreakUnit.HOURS) breakValue else null,
                         categories = plan.pitstopCategories
@@ -223,7 +232,8 @@ fun TripPlannerScreen(
                 day = activeDay,
                 onDayChange = { updatePlan(RoutePlans.updateDay(plan, activeIndex, it)) },
                 canRemoveDay = plan.days.size > 1,
-                onRemoveDay = { dayPendingRemoval = activeIndex }
+                onRemoveDay = { dayPendingRemoval = activeIndex },
+                onMessage = onError
             )
 
             HorizontalDivider()
@@ -376,7 +386,8 @@ private fun OrganizerRouteForm(
     day: RouteDay,
     onDayChange: (RouteDay) -> Unit,
     canRemoveDay: Boolean,
-    onRemoveDay: () -> Unit
+    onRemoveDay: () -> Unit,
+    onMessage: (String) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(
@@ -400,7 +411,9 @@ private fun OrganizerRouteForm(
             AutocompletePlaceField(
                 label = "From",
                 value = day.from,
-                onValueChange = { onDayChange(day.copy(from = it)) }
+                onValueChange = { onDayChange(day.copy(from = it)) },
+                onMessage = onMessage,
+                allowCurrentLocation = true
             )
 
             day.toStops.forEachIndexed { index, stopValue ->
@@ -412,6 +425,7 @@ private fun OrganizerRouteForm(
                             val updated = day.toStops.toMutableList().also { it[index] = new }
                             onDayChange(day.copy(toStops = updated))
                         },
+                        onMessage = onMessage,
                         modifier = Modifier.weight(1f)
                     )
                     if (day.toStops.size > 1) {
@@ -423,7 +437,7 @@ private fun OrganizerRouteForm(
                         }
                     }
                     if (index == day.toStops.lastIndex && day.toStops.size < RoutePlan.MAX_TO_STOPS) {
-                        IconButton(onClick = { onDayChange(day.copy(toStops = day.toStops + "")) }) {
+                        IconButton(onClick = { onDayChange(day.copy(toStops = day.toStops + Place())) }) {
                             Icon(Icons.Filled.Add, contentDescription = "Add another stop")
                         }
                     }
@@ -478,7 +492,7 @@ private fun OrganizerRouteForm(
 
 @Composable
 private fun ReadOnlyRouteCard(day: RouteDay, dayNumber: Int, totalDays: Int, groupName: String, tripCompleted: Boolean) {
-    val validStops = day.toStops.map { it.trim() }.filter { it.isNotBlank() }
+    val validStops = day.toStops.filter { it.name.isNotBlank() }
     ElevatedCard {
         Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             Row(
@@ -506,9 +520,9 @@ private fun ReadOnlyRouteCard(day: RouteDay, dayNumber: Int, totalDays: Int, gro
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Text("From: ${day.from.ifBlank { "Not set yet" }}", style = MaterialTheme.typography.bodyLarge)
+            RoutePlaceLine("From", day.from.name.ifBlank { "Not set yet" }, day.from.address, MaterialTheme.typography.bodyLarge)
             validStops.forEachIndexed { i, stop ->
-                Text("Stop ${i + 1}: $stop", style = MaterialTheme.typography.bodyMedium)
+                RoutePlaceLine("Stop ${i + 1}", stop.name, stop.address, MaterialTheme.typography.bodyMedium)
             }
             if (day.roundTrip) {
                 Text(
@@ -517,6 +531,22 @@ private fun ReadOnlyRouteCard(day: RouteDay, dayNumber: Int, totalDays: Int, gro
                     color = MaterialTheme.colorScheme.tertiary
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun RoutePlaceLine(label: String, name: String, address: String, style: TextStyle) {
+    Column {
+        Text("$label: $name", style = style)
+        if (address.isNotBlank()) {
+            Text(
+                address,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -997,58 +1027,144 @@ private fun TripMembersCard(
 @Composable
 private fun AutocompletePlaceField(
     label: String,
-    value: String,
-    onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier
+    value: Place,
+    onValueChange: (Place) -> Unit,
+    onMessage: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    allowCurrentLocation: Boolean = false
 ) {
-    var suggestions by remember { mutableStateOf<List<PlaceSuggestion>>(emptyList()) }
+    val context = LocalContext.current
+    var results by remember { mutableStateOf<List<PlaceSearchResult>>(emptyList()) }
     var expanded by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var searchJob by remember { mutableStateOf<Job?>(null) }
 
+    fun useCurrentLocation() {
+        busy = true
+        expanded = false
+        scope.launch {
+            try {
+                onValueChange(CurrentLocation.asPlace(context))
+            } catch (e: CurrentLocation.Unavailable) {
+                onMessage(e.message ?: "Couldn't get your location.")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onMessage("Couldn't get your location. Please try again.")
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        if (grants.values.any { it }) {
+            useCurrentLocation()
+        } else {
+            onMessage("Location access is off. Allow it in the phone's Settings to use your current location.")
+        }
+    }
+    val askForLocation = {
+        if (CurrentLocation.hasPermission(context)) useCurrentLocation() else permissionLauncher.launch(CurrentLocation.PERMISSIONS)
+    }
+
     Column(modifier = modifier) {
         OutlinedTextField(
-            value = value,
+            value = value.name,
             onValueChange = { new ->
-                onValueChange(new)
+                // Typing replaces whatever place was picked before; a suggestion brings the exact
+                // place back.
+                onValueChange(Place(name = new))
                 searchJob?.cancel()
                 if (new.trim().length >= 2) {
                     searchJob = scope.launch {
-                        delay(400) // debounce: wait for a pause in typing before calling the free search API
-                        val results = PlacesRepository.searchPlaces(new)
-                        suggestions = results
-                        expanded = results.isNotEmpty()
+                        delay(400) // debounce: wait for a pause in typing before searching
+                        busy = true
+                        val found = try {
+                            PlaceSearch.search(new)
+                        } finally {
+                            busy = false
+                        }
+                        results = found
+                        expanded = found.isNotEmpty()
                     }
                 } else {
-                    suggestions = emptyList()
+                    results = emptyList()
                     expanded = false
                 }
             },
             label = { Text(label) },
-            placeholder = { Text("Type at least 2 letters for suggestions") },
+            placeholder = { Text("Search a place, address or landmark") },
             singleLine = true,
+            supportingText = PlaceRules.describe(value, System.currentTimeMillis())?.let { line ->
+                { Text(line, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+            },
+            trailingIcon = when {
+                busy -> {
+                    { CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp) }
+                }
+                allowCurrentLocation -> {
+                    {
+                        IconButton(onClick = askForLocation) {
+                            Icon(Icons.Filled.MyLocation, contentDescription = "Use my current location")
+                        }
+                    }
+                }
+                else -> null
+            },
             modifier = Modifier.fillMaxWidth()
         )
-        if (expanded && suggestions.isNotEmpty()) {
+        if (allowCurrentLocation && value.name.isBlank() && !busy) {
+            AssistChip(
+                onClick = askForLocation,
+                leadingIcon = { Icon(Icons.Filled.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                label = { Text("Use my current location") }
+            )
+        }
+        if (expanded && results.isNotEmpty()) {
             Card(
                 modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
                 elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
             ) {
                 Column {
-                    suggestions.take(5).forEachIndexed { i, s ->
-                        Text(
-                            s.displayName,
+                    val shown = results.take(5)
+                    shown.forEachIndexed { i, result ->
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    onValueChange(s.displayName)
                                     expanded = false
+                                    scope.launch {
+                                        try {
+                                            onValueChange(PlaceSearch.select(result))
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (e: Exception) {
+                                            onMessage("Couldn't load that place. Check your internet connection and try again.")
+                                        }
+                                    }
                                 }
-                                .padding(12.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 2
-                        )
-                        if (i < suggestions.take(5).lastIndex) HorizontalDivider()
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                result.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (result.subtitle.isNotBlank()) {
+                                Text(
+                                    result.subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        if (i < shown.lastIndex) HorizontalDivider()
                     }
                 }
             }
@@ -1078,57 +1194,60 @@ private fun RoutePrefOption(label: String, selected: Boolean, onSelect: () -> Un
     }
 }
 
-private data class MapWaypoint(val name: String, val cumulativeKm: Double)
+private data class MapWaypoint(val text: String, val cumulativeKm: Double)
 
-/** Opens Google Maps with turn-by-turn directions through the full route: the manually-typed
- *  stops *and* any pitstops generated by the Smart Pitstop Engine, merged into one waypoint list
- *  in true route order (not just typed stops first, pitstops tacked on after). Pitstops already
- *  carry their distance from the start of the route; named stops' distances come from OSRM's
- *  per-leg distances on the last-fetched [routeInfo], so both sides are on the same scale. */
+/** Opens Google Maps with turn-by-turn directions through the full route: the typed stops *and*
+ *  any generated pitstops, merged into one waypoint list in true route order. Places with a saved
+ *  location go to Maps as that exact point (or as Google's place, when picked from Google), so
+ *  Maps opens the same spot that was picked here instead of searching the name again. Pitstops
+ *  carry their distance from the start; named stops' distances come from the last-fetched
+ *  [routeInfo]'s per-leg distances, so both sides are on the same scale. */
 private fun openInGoogleMaps(
     context: Context,
-    plan: RouteDay,
+    day: RouteDay,
     routeInfo: RouteRepository.RouteInfo?,
     pitstops: List<RouteRepository.Pitstop>
 ) {
-    val validStops = plan.toStops.map { it.trim() }.filter { it.isNotBlank() }
-    if (plan.from.isBlank() || validStops.isEmpty()) return
+    val now = System.currentTimeMillis()
+    val stops = day.toStops.filter { it.name.isNotBlank() }
+    if (day.from.name.isBlank() || stops.isEmpty()) return
 
-    val namedChain = listOf(plan.from.trim()) + validStops
+    val chain = listOf(day.from) + stops
     val cumulativeKm = mutableListOf(0.0)
-    if (routeInfo != null && routeInfo.legDistancesMeters.size >= namedChain.size - 1) {
+    if (routeInfo != null && routeInfo.legDistancesMeters.size >= chain.size - 1) {
         var running = 0.0
-        for (i in 1 until namedChain.size) {
+        for (i in 1 until chain.size) {
             running += routeInfo.legDistancesMeters[i - 1] / 1000.0
             cumulativeKm.add(running)
         }
     } else {
         // No route fetched yet (e.g. offline) — fall back to typed order, pitstops omitted since
         // we have no shared distance scale to place them on.
-        for (i in 1 until namedChain.size) cumulativeKm.add(i.toDouble())
+        for (i in 1 until chain.size) cumulativeKm.add(i.toDouble())
     }
 
-    val lastNamed = MapWaypoint(namedChain.last(), cumulativeKm.last())
-    val intermediateNamed = namedChain.drop(1).dropLast(1)
-        .mapIndexed { i, name -> MapWaypoint(name, cumulativeKm[i + 1]) }
+    val lastNamed = MapWaypoint(PlaceRules.waypointText(chain.last(), now), cumulativeKm.last())
+    val intermediateNamed = chain.drop(1).dropLast(1)
+        .mapIndexed { i, place -> MapWaypoint(PlaceRules.waypointText(place, now), cumulativeKm[i + 1]) }
     val pitstopPoints = if (routeInfo != null) pitstops.map { MapWaypoint(it.placeName, it.distanceKm) } else emptyList()
 
     // On a round trip the last typed stop is a waypoint too, and pitstops found on the drive back
     // (further along than that stop) must come after it, so everything is sorted together.
-    val waypointNames = if (plan.roundTrip) {
-        (intermediateNamed + pitstopPoints + lastNamed).sortedBy { it.cumulativeKm }.map { it.name }
+    val waypointTexts = if (day.roundTrip) {
+        (intermediateNamed + pitstopPoints + lastNamed).sortedBy { it.cumulativeKm }.map { it.text }
     } else {
-        (intermediateNamed + pitstopPoints).sortedBy { it.cumulativeKm }.map { it.name }
+        (intermediateNamed + pitstopPoints).sortedBy { it.cumulativeKm }.map { it.text }
     }
 
-    val origin = URLEncoder.encode(plan.from, "UTF-8")
-    val destinationName = if (plan.roundTrip) plan.from else lastNamed.name
-    val destination = URLEncoder.encode(destinationName, "UTF-8")
-    val waypoints = waypointNames.joinToString("|") { URLEncoder.encode(it, "UTF-8") }
+    val (originText, originPlaceId) = PlaceRules.mapsTarget(day.from, now)
+    val (destinationText, destinationPlaceId) = PlaceRules.mapsTarget(if (day.roundTrip) day.from else chain.last(), now)
+    val encode = { text: String -> URLEncoder.encode(text, "UTF-8") }
 
     val url = buildString {
-        append("https://www.google.com/maps/dir/?api=1&origin=$origin&destination=$destination&travelmode=driving")
-        if (waypoints.isNotBlank()) append("&waypoints=$waypoints")
+        append("https://www.google.com/maps/dir/?api=1&origin=${encode(originText)}&destination=${encode(destinationText)}&travelmode=driving")
+        if (originPlaceId != null) append("&origin_place_id=${encode(originPlaceId)}")
+        if (destinationPlaceId != null) append("&destination_place_id=${encode(destinationPlaceId)}")
+        if (waypointTexts.isNotEmpty()) append("&waypoints=${waypointTexts.joinToString("|") { encode(it) }}")
     }
     try {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))

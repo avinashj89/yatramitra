@@ -139,7 +139,7 @@ class RouteRepositoryNetworkTest {
             runPipeline(names = listOf("Bangalore", "Nonexistentplacexyz"))
             fail("expected PitstopUnavailableException")
         } catch (e: RouteRepository.PitstopUnavailableException) {
-            assertEquals("Couldn't find \"Nonexistentplacexyz\" — check the spelling or try a nearby landmark.", e.message)
+            assertEquals("Couldn't find \"Nonexistentplacexyz\" — pick it from the suggestions, or try a nearby landmark.", e.message)
         }
     }
 

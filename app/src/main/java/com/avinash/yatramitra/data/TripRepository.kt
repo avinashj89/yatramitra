@@ -333,8 +333,8 @@ object TripRepository {
         val existingDay = existing?.let { docToItineraryDay(it) }
         val manualStops = existingDay?.stops?.filter { it.source == StopSource.MANUAL } ?: emptyList()
 
-        val start = day.from.trim()
-        val destinationName = RoutePlans.endpoint(day)
+        val start = day.from.name.trim()
+        val destinationName = RoutePlans.endpoint(day).name
 
         var order = 0
         val autoStops = mutableListOf<ItineraryStop>()

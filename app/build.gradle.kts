@@ -104,6 +104,9 @@ dependencies {
     // even though the server itself is fine; this is Google's documented fix.
     implementation("com.google.android.gms:play-services-base:18.5.0")
 
+    // "Use my current location" for From/To and for SOS messages.
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // JVM unit tests (app/src/test) -- pure-logic tests, no device/emulator needed.

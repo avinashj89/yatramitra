@@ -2,6 +2,7 @@ package com.avinash.yatramitra.data
 
 import com.avinash.yatramitra.model.BreakUnit
 import com.avinash.yatramitra.model.DEFAULT_PITSTOP_CATEGORIES
+import com.avinash.yatramitra.model.Place
 import com.avinash.yatramitra.model.RouteDay
 import com.avinash.yatramitra.model.RoutePlan
 import com.avinash.yatramitra.model.RoutePreference
@@ -12,23 +13,26 @@ import com.avinash.yatramitra.model.RoutePreference
  */
 object RoutePlans {
 
+    private fun Place.isSet() = name.isNotBlank()
+
     /** Where a day's drive ends: back at its start for a round trip, otherwise its last "To". */
-    fun endpoint(day: RouteDay): String =
-        if (day.roundTrip) day.from.trim() else day.toStops.map { it.trim() }.lastOrNull { it.isNotBlank() }.orEmpty()
+    fun endpoint(day: RouteDay): Place =
+        if (day.roundTrip) day.from.trimmed() else day.toStops.map { it.trimmed() }.lastOrNull { it.isSet() } ?: Place()
 
     /** True once a day has a start and at least one destination. */
-    fun hasRoute(day: RouteDay): Boolean = day.from.isNotBlank() && day.toStops.any { it.isNotBlank() }
+    fun hasRoute(day: RouteDay): Boolean = day.from.isSet() && day.toStops.any { it.isSet() }
 
     /** The day's places in driving order, blanks dropped, ending back at the start on a round trip. */
-    fun placesInOrder(day: RouteDay): List<String> {
-        val places = (listOf(day.from) + day.toStops).map { it.trim() }.filter { it.isNotBlank() }
+    fun placesInOrder(day: RouteDay): List<Place> {
+        val places = (listOf(day.from) + day.toStops).map { it.trimmed() }.filter { it.isSet() }
         return if (day.roundTrip && places.size >= 2) places + places.first() else places
     }
 
-    /** Adds the next day, starting where the previous day ended so it doesn't have to be retyped. */
+    /** Adds the next day, starting where the previous day ended (with its exact location, if
+     *  known) so it doesn't have to be retyped. */
     fun addDay(plan: RoutePlan): RoutePlan {
         if (plan.days.size >= RoutePlan.MAX_DAYS) return plan
-        return plan.copy(days = plan.days + RouteDay(from = plan.days.lastOrNull()?.let(::endpoint).orEmpty()))
+        return plan.copy(days = plan.days + RouteDay(from = plan.days.lastOrNull()?.let(::endpoint) ?: Place()))
     }
 
     /** Removes a day; removing the only day clears it instead, so there is always a Day 1. */
@@ -47,12 +51,21 @@ object RoutePlans {
         val first = plan.days.firstOrNull() ?: RouteDay()
         return mapOf(
             "days" to plan.days.map {
-                mapOf("from" to it.from, "toStops" to it.toStops, "roundTrip" to it.roundTrip, "pitstopsEnabled" to it.pitstopsEnabled)
+                mapOf(
+                    // Plain names stay where older app versions (and the admin panel) read them;
+                    // the full places sit next to them.
+                    "from" to it.from.name,
+                    "toStops" to it.toStops.map { stop -> stop.name },
+                    "fromPlace" to PlaceRules.toMap(it.from),
+                    "toPlaces" to it.toStops.map(PlaceRules::toMap),
+                    "roundTrip" to it.roundTrip,
+                    "pitstopsEnabled" to it.pitstopsEnabled
+                )
             },
             // Day 1 is also written in the old single-day fields, so a phone still running an
             // older version of the app keeps showing at least Day 1 instead of an empty route.
-            "from" to first.from,
-            "toStops" to first.toStops,
+            "from" to first.from.name,
+            "toStops" to first.toStops.map { it.name },
             "roundTrip" to first.roundTrip,
             "breakEvery" to plan.breakEvery,
             "breakUnit" to plan.breakUnit.name,
@@ -85,10 +98,17 @@ object RoutePlans {
         )
     }
 
-    private fun dayFromMap(map: Map<*, *>, defaultPitstops: Boolean): RouteDay = RouteDay(
-        from = map["from"] as? String ?: "",
-        toStops = (map["toStops"] as? List<*>)?.filterIsInstance<String>()?.ifEmpty { null } ?: listOf(""),
-        roundTrip = map["roundTrip"] as? Boolean ?: false,
-        pitstopsEnabled = map["pitstopsEnabled"] as? Boolean ?: defaultPitstops
-    )
+    private fun dayFromMap(map: Map<*, *>, defaultPitstops: Boolean): RouteDay {
+        val fromName = map["from"] as? String ?: ""
+        val stopNames = (map["toStops"] as? List<*>)?.filterIsInstance<String>()?.ifEmpty { null } ?: listOf("")
+        val savedStops = map["toPlaces"] as? List<*>
+        return RouteDay(
+            from = PlaceRules.fromMap(map["fromPlace"], fromName),
+            toStops = stopNames.mapIndexed { i, name -> PlaceRules.fromMap(savedStops?.getOrNull(i), name) },
+            roundTrip = map["roundTrip"] as? Boolean ?: false,
+            pitstopsEnabled = map["pitstopsEnabled"] as? Boolean ?: defaultPitstops
+        )
+    }
+
+    private fun Place.trimmed(): Place = if (name == name.trim()) this else copy(name = name.trim())
 }

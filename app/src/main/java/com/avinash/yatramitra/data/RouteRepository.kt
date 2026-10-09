@@ -1,5 +1,6 @@
 package com.avinash.yatramitra.data
 
+import com.avinash.yatramitra.model.Place
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -138,14 +139,36 @@ object RouteRepository {
         return samples.filter { (_, km) -> km < totalKm - 2.0 }
     }
 
-    /** Geocodes an ordered list of typed place names and fetches the driving route through them.
-     *  Null if fewer than 2 valid names, any place can't be found, or the route lookup fails. */
-    suspend fun fetchRouteSummary(orderedPlaceNames: List<String>): RouteInfo? {
-        val validNames = orderedPlaceNames.map { it.trim() }.filter { it.isNotBlank() }
-        if (validNames.size < 2) return null
-        val geocoded = validNames.map { PlacesRepository.geocode(it) }
-        if (geocoded.any { it == null }) return null
-        val points = geocoded.map { RoutePoint(it!!.lat, it.lon) }
+    /**
+     * Where [place] is: its saved location when the app has a usable one (picked from a search,
+     * or the phone's own position), otherwise its name looked up on OpenStreetMap. Null if the
+     * name can't be found; throws if the lookup itself fails (so a dead connection isn't
+     * mistaken for "no such place").
+     */
+    internal suspend fun locateOrThrow(place: Place, nominatimBaseUrl: String = PlacesRepository.NOMINATIM_BASE_URL): RoutePoint? {
+        PlaceRules.usableLocation(place, System.currentTimeMillis())?.let { (lat, lng) -> return RoutePoint(lat, lng) }
+        locateHook?.invoke(place)?.let { return it }
+        val hit = PlacesRepository.geocodeOrThrow(place.name, nominatimBaseUrl) ?: return null
+        return RoutePoint(hit.lat, hit.lon)
+    }
+
+    /** Extra way to find a place without a usable saved location (Google place IDs, wired in by
+     *  GooglePlaces when it's configured). Null leaves the OpenStreetMap name lookup. */
+    @Volatile
+    internal var locateHook: (suspend (Place) -> RoutePoint?)? = null
+
+    /** The driving route through an ordered list of places. Null if fewer than 2 places, any
+     *  place can't be found, or the route lookup fails. */
+    suspend fun fetchRouteSummary(orderedPlaces: List<Place>): RouteInfo? {
+        val valid = orderedPlaces.filter { it.name.isNotBlank() }
+        if (valid.size < 2) return null
+        val points = try {
+            valid.map { locateOrThrow(it) ?: return null }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return null
+        }
         return fetchRoute(points)
     }
 
@@ -161,7 +184,7 @@ object RouteRepository {
         overpassBaseUrl: String,
         categories: Set<String> = emptySet()
     ): List<Pitstop> = suggestPitstopsInternal(
-        orderedPlaceNames, breakEveryKm, breakEveryHours, nominatimBaseUrl, osrmBaseUrl, overpassBaseUrl, categories
+        orderedPlaceNames.map(PlaceRules::typed), breakEveryKm, breakEveryHours, nominatimBaseUrl, osrmBaseUrl, overpassBaseUrl, categories
     )
 
     /** Thrown by [suggestPitstops] with a specific, user-facing reason for exactly which step
@@ -182,17 +205,17 @@ object RouteRepository {
      * can tell the user (and us) exactly what went wrong instead of a generic message.
      */
     suspend fun suggestPitstops(
-        orderedPlaceNames: List<String>,
+        orderedPlaces: List<Place>,
         breakEveryKm: Double?,
         breakEveryHours: Double?,
         categories: Set<String> = emptySet()
     ): List<Pitstop> = suggestPitstopsInternal(
-        orderedPlaceNames, breakEveryKm, breakEveryHours,
+        orderedPlaces, breakEveryKm, breakEveryHours,
         PlacesRepository.NOMINATIM_BASE_URL, OSRM_BASE_URL, PlacesRepository.OVERPASS_BASE_URL, categories
     )
 
     private suspend fun suggestPitstopsInternal(
-        orderedPlaceNames: List<String>,
+        orderedPlaces: List<Place>,
         breakEveryKm: Double?,
         breakEveryHours: Double?,
         nominatimBaseUrl: String,
@@ -200,13 +223,13 @@ object RouteRepository {
         overpassBaseUrl: String,
         categories: Set<String>
     ): List<Pitstop> {
-        val validNames = orderedPlaceNames.map { it.trim() }.filter { it.isNotBlank() }
-        if (validNames.size < 2) {
+        val validPlaces = orderedPlaces.map { it.copy(name = it.name.trim()) }.filter { it.name.isNotBlank() }
+        if (validPlaces.size < 2) {
             throw PitstopUnavailableException("Add a From place and at least one To place first.")
         }
 
-        val geocoded = try {
-            validNames.map { name -> name to PlacesRepository.geocodeOrThrow(name, nominatimBaseUrl) }
+        val located = try {
+            validPlaces.map { place -> place.name to locateOrThrow(place, nominatimBaseUrl) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -214,12 +237,12 @@ object RouteRepository {
                 "Couldn't reach the place-lookup service (${describeFailure(e)}) — check your internet connection and try again."
             )
         }
-        val badName = geocoded.firstOrNull { it.second == null }?.first
+        val badName = located.firstOrNull { it.second == null }?.first
         if (badName != null) {
-            throw PitstopUnavailableException("Couldn't find \"$badName\" — check the spelling or try a nearby landmark.")
+            throw PitstopUnavailableException("Couldn't find \"$badName\" — pick it from the suggestions, or try a nearby landmark.")
         }
 
-        val points = geocoded.map { RoutePoint(it.second!!.lat, it.second!!.lon) }
+        val points = located.map { it.second!! }
         val route = try {
             fetchRouteOrThrow(points, osrmBaseUrl)
         } catch (e: CancellationException) {
