@@ -1040,7 +1040,7 @@ private fun TripMembersCard(
 }
 
 @Composable
-private fun AutocompletePlaceField(
+internal fun AutocompletePlaceField(
     label: String,
     value: Place,
     onValueChange: (Place) -> Unit,

@@ -75,6 +75,13 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    testOptions {
+        unitTests {
+            // Lets the opt-in screenshot test (ScreenshotTest) load the real theme and resources.
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -136,6 +143,12 @@ dependencies {
     // standalone artifact provides a real, working implementation on the unit-test classpath so
     // JSON parsing actually executes instead of throwing on first use.
     testImplementation("org.json:json:20231013")
+    // Renders real screens to PNG files under app/build/screens without a device (ScreenshotTest).
+    // Skipped unless run with -PrenderScreens=1, so normal test runs and CI don't pay for it.
+    testImplementation("org.robolectric:robolectric:4.12.2")
+    testImplementation(platform("androidx.compose:compose-bom:2024.06.00"))
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
 // Prints the committed debug keystore's SHA-1/SHA-256 fingerprint to the build log, purely as a
@@ -174,6 +187,8 @@ tasks.matching { it.name == "assembleDebug" }.configureEach {
 // a separate CI artifact upload (blocked: this repo's access token lacks the `workflow` scope
 // needed to touch .github/workflows/*.yml).
 tasks.withType<Test> {
+    (project.findProperty("renderScreens") as String?)?.let { systemProperty("renderScreens", it) }
+    (project.findProperty("m2Local") as String?)?.let { systemProperty("maven.repo.local", it) }
     testLogging {
         events("passed", "skipped", "failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
