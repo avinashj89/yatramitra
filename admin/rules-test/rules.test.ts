@@ -105,6 +105,9 @@ describe("what the Android app does keeps working", () => {
     await assertSucceeds(setDoc(doc(db, "trips", "T1", "chat", "c2"), { text: "hello", createdAt: 4, authorUid: BOB }));
     await assertSucceeds(setDoc(doc(db, "trips", "T1", "members", "m2"), { name: "Bob", uid: BOB, joinedAt: 5 }));
     await assertSucceeds(updateDoc(doc(db, "trips", "T1"), { routePlan: { days: [] } }));
+    // Hospitals along each route day, saved for the whole group.
+    await assertSucceeds(setDoc(doc(db, "trips", "T1", "hospitals", "day-0"), { dayIndex: 0, routeKey: "a|b", hospitals: [] }));
+    await assertSucceeds(getDocs(collection(db, "trips", "T1", "hospitals")));
   });
 
   it("reads its own homepage list and finds its own place on a trip", async () => {
@@ -131,5 +134,6 @@ describe("signed-out visitors", () => {
     await assertFails(getDocs(collection(db, "trips")));
     await assertFails(getDoc(doc(db, "admins", ADMIN)));
     await assertFails(getDocs(collectionGroup(db, "chat")));
+    await assertFails(getDocs(collection(db, "trips", "T1", "hospitals")));
   });
 });

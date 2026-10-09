@@ -54,6 +54,31 @@ data class Place(
     val locatedAtMillis: Long = 0L
 )
 
+/** A hospital near one day's route, for emergencies. From OpenStreetMap, so it can be saved and
+ *  shared with the whole group (and read without signal). */
+data class Hospital(
+    val id: String = "",
+    val name: String = "",
+    val address: String = "",
+    /** Empty when OpenStreetMap doesn't list one; the screen then offers Google Maps instead. */
+    val phone: String = "",
+    val lat: Double = 0.0,
+    val lng: Double = 0.0,
+    /** How far along that day's drive it is. */
+    val kmFromStart: Double = 0.0,
+    /** OpenStreetMap marks it as having an emergency department. */
+    val emergency: Boolean = false
+)
+
+/** The saved hospital list for one route day. [routeKey] identifies the route it was found for,
+ *  so a changed route is noticed and the list found again. */
+data class DayHospitals(
+    val dayIndex: Int = 0,
+    val routeKey: String = "",
+    val generatedAtMillis: Long = 0L,
+    val hospitals: List<Hospital> = emptyList()
+)
+
 /** One row of the From/To search dropdown. Google results have no coordinates until picked. */
 data class PlaceSearchResult(
     val title: String,

@@ -139,6 +139,9 @@ fun TripPlannerScreen(
     val dayNumber = activeIndex + 1
 
     LaunchedEffect(activeDay.from, activeDay.toStops, activeDay.roundTrip) {
+        // Cleared straight away so nothing (distance, hospitals) uses the previous day's or the
+        // previous places' route while the new one is worked out.
+        routeInfo = null
         val places = RoutePlans.placesInOrder(activeDay)
         if (places.size < 2) {
             routeInfo = null
@@ -273,6 +276,16 @@ fun TripPlannerScreen(
             routeInfo = routeInfo,
             hasRoute = hasRoute,
             onOpenMaps = { openInGoogleMaps(context, activeDay, routeInfo, dayPitstops) }
+        )
+
+        HorizontalDivider()
+
+        HospitalsCard(
+            tripCode = session.tripCode,
+            days = plan.days,
+            dayIndex = activeIndex,
+            routeInfo = routeInfo,
+            canUpdate = !isReadOnly
         )
 
         if (canEdit) {

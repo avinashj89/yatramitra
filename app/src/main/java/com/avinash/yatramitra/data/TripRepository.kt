@@ -1,6 +1,7 @@
 package com.avinash.yatramitra.data
 
 import com.avinash.yatramitra.model.ChatMessage
+import com.avinash.yatramitra.model.DayHospitals
 import com.avinash.yatramitra.model.Expense
 import com.avinash.yatramitra.model.ItineraryDay
 import com.avinash.yatramitra.model.ItinerarySuggestion
@@ -232,7 +233,7 @@ object TripRepository {
     suspend fun deleteTrip(code: String, myUid: String?) {
         val upperCode = code.uppercase()
         val tripRef = db.collection("trips").document(upperCode)
-        val subcollections = listOf("members", "expenses", "itineraryDays", "routeSuggestions", "itinerarySuggestions", "chat")
+        val subcollections = listOf("members", "expenses", "itineraryDays", "routeSuggestions", "itinerarySuggestions", "chat", "hospitals")
         for (name in subcollections) {
             val docs = tripRef.collection(name).get().await().documents
             // A Firestore batch holds at most 500 writes; a long chat easily has more.
@@ -522,6 +523,29 @@ object TripRepository {
         db.collection("trips").document(code.uppercase())
             .collection("expenses").document(expenseId)
             .delete().await()
+    }
+
+    // ---- Hospitals along the route (one document per route day) ----
+
+    /** Every saved day's hospital list, keyed by day index (0 = Day 1). */
+    fun observeHospitals(code: String): Flow<Map<Int, DayHospitals>> = callbackFlow {
+        val reg = db.collection("trips").document(code.uppercase())
+            .collection("hospitals")
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) {
+                    Log.w(TAG, "hospitals listener for $code failed", error)
+                    return@addSnapshotListener
+                }
+                trySend(snap.documents.mapNotNull { doc -> doc.data?.let(HospitalRules::fromMap) }.associateBy { it.dayIndex })
+            }
+        awaitClose { reg.remove() }
+    }
+
+    suspend fun saveHospitals(code: String, day: DayHospitals) {
+        db.collection("trips").document(code.uppercase())
+            .collection("hospitals").document("day-${day.dayIndex}")
+            .set(HospitalRules.toMap(day))
+            .await()
     }
 
     // ---- Group chat ----
