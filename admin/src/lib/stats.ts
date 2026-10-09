@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 import type { ActivityEvent, ChatMessage, DeviceToken, Expense, Member, Trip, UserProfile } from "../types";
+import { SOS_LABELS } from "./parse";
 
 // Everything the dashboard computes from the live data. Pure, so it is unit-tested.
 
@@ -121,7 +122,8 @@ export function activityFeed(
     });
   }
   for (const c of input.chat) {
-    events.push({ id: `c-${c.tripCode}-${c.id}`, kind: "chat", at: c.createdAt, tripCode: c.tripCode, tripName: name(c.tripCode), text: `${c.authorName}: ${c.text}` });
+    const text = c.sos ? `SOS (${SOS_LABELS[c.sos.type]}) from ${c.authorName}` : `${c.authorName}: ${c.text}`;
+    events.push({ id: `c-${c.tripCode}-${c.id}`, kind: "chat", at: c.createdAt, tripCode: c.tripCode, tripName: name(c.tripCode), text });
   }
   return events.filter((e) => e.at > 0).sort((a, b) => b.at - a.at).slice(0, limit);
 }

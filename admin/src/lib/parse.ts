@@ -9,6 +9,8 @@ import type {
   MemberRole,
   RouteDay,
   RoutePlan,
+  SosAlert,
+  SosType,
   Trip,
   TripStatus,
   TripSummary,
@@ -113,6 +115,24 @@ export function parseExpense(tripCode: string, id: string, d: Data): Expense {
   };
 }
 
+const SOS_TYPES: SosType[] = ["ACCIDENT", "MEDICAL", "BREAKDOWN", "POLICE", "FUEL", "ATM"];
+
+/** The SOS on a chat message, if it is one (kind "sos" with a known type). */
+export function parseSos(d: Data): SosAlert | null {
+  if (d.kind !== "sos" || !SOS_TYPES.includes(d.sosType as SosType)) return null;
+  const coord = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  return { type: d.sosType as SosType, lat: coord(d.lat), lng: coord(d.lng), locationName: str(d.locationName) };
+}
+
+export const SOS_LABELS: Record<SosType, string> = {
+  ACCIDENT: "Accident",
+  MEDICAL: "Medical help",
+  BREAKDOWN: "Breakdown",
+  POLICE: "Police help",
+  FUEL: "Need fuel",
+  ATM: "Need cash",
+};
+
 export function parseChat(tripCode: string, id: string, d: Data, source: ChatMessage["source"] = "chat"): ChatMessage {
   return {
     id,
@@ -122,6 +142,7 @@ export function parseChat(tripCode: string, id: string, d: Data, source: ChatMes
     text: str(d.text),
     createdAt: millis(d.createdAt),
     source,
+    sos: parseSos(d),
   };
 }
 

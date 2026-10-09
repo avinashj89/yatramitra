@@ -72,7 +72,7 @@ function build(now: number) {
   const chat: ChatMessage[] = [];
   const say = (tripCode: string, id: string, authorMemberId: string, text: string, ago: number) => {
     const author = members.find((m) => m.id === authorMemberId);
-    chat.push({ id, tripCode, authorMemberId, authorName: author?.name ?? "Someone", text, createdAt: now - ago, source: "chat" });
+    chat.push({ id, tripCode, authorMemberId, authorName: author?.name ?? "Someone", text, createdAt: now - ago, source: "chat", sos: null });
   };
   say("CRG7K2", "c1", "m1", "Leaving at 5:30 sharp tomorrow, please be ready!", 3 * DAY);
   say("CRG7K2", "c2", "m2", "Can we stop for breakfast in Mysuru?", 3 * DAY - 2 * HOUR);
@@ -83,6 +83,11 @@ function build(now: number) {
   say("GOA4X9", "c7", "m7", "I'll book the scooters.", 22 * HOUR);
   say("OTY8M5", "c8", "m10", "Toll paid, we're past Mettupalayam.", 2 * HOUR);
   say("WYD2T6", "c9", "m12", "Who's driving on Friday?", 30 * 60 * 1000);
+  chat.push({
+    id: "c10", tripCode: "OTY8M5", authorMemberId: "m10", authorName: "Vikram Shetty", createdAt: now - 90 * 60 * 1000, source: "chat",
+    text: "SOS: Breakdown. Vikram Shetty needs help. Location: Near Burliar, Nilgiris.",
+    sos: { type: "BREAKDOWN", lat: 11.338, lng: 76.84, locationName: "Near Burliar, Nilgiris" },
+  });
 
   const devices: DeviceToken[] = [
     { token: "demo-token-asha-0000000000000001", uid: "u-asha", platform: "android", updatedAt: now - 2 * HOUR },

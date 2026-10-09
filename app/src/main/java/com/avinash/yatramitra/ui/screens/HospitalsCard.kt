@@ -11,7 +11,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.Directions
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -118,6 +117,42 @@ fun HospitalsCard(
     }
 
     val dayLabel = if (days.size > 1) "Day ${dayIndex + 1}" else "the route"
+    HospitalsCardBody(
+        dayLabel = dayLabel,
+        updatedAtMillis = savedDay?.generatedAtMillis?.takeIf { upToDate },
+        hasRoute = hasRoute,
+        finding = finding,
+        failure = failure,
+        hospitals = savedDay?.hospitals,
+        routeChanged = savedDay != null && !upToDate,
+        canUpdate = canUpdate,
+        multiDay = days.size > 1,
+        onFind = ::find,
+        onShowAllDays = { showAllDays = true },
+        onSearchMaps = { EmergencyActions.searchMaps(context, "hospitals near ${day.from.name}") }
+    )
+
+    if (showAllDays) {
+        AllDaysHospitalsDialog(days = days, saved = saved.orEmpty(), onDismiss = { showAllDays = false })
+    }
+}
+
+/** The hospitals card's drawing, separate from loading and saving the data. */
+@Composable
+fun HospitalsCardBody(
+    dayLabel: String,
+    updatedAtMillis: Long?,
+    hasRoute: Boolean,
+    finding: Boolean,
+    failure: String?,
+    hospitals: List<Hospital>?,
+    routeChanged: Boolean,
+    canUpdate: Boolean,
+    multiDay: Boolean,
+    onFind: () -> Unit,
+    onShowAllDays: () -> Unit,
+    onSearchMaps: () -> Unit
+) {
     ElevatedCard {
         Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -126,13 +161,13 @@ fun HospitalsCard(
                 Column(Modifier.weight(1f)) {
                     Text("Hospitals along $dayLabel", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        if (upToDate) "Within 4 km of the route · updated ${formatUpdated(savedDay!!.generatedAtMillis)}" else "Within 4 km of the route",
+                        if (updatedAtMillis != null) "Within 4 km of the route · updated ${formatUpdated(updatedAtMillis)}" else "Within 4 km of the route",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 if (canUpdate && hasRoute && !finding) {
-                    IconButton(onClick = ::find) { Icon(Icons.Filled.Refresh, contentDescription = "Look up hospitals again") }
+                    IconButton(onClick = onFind) { Icon(Icons.Filled.Refresh, contentDescription = "Look up hospitals again") }
                 }
             }
 
@@ -149,16 +184,16 @@ fun HospitalsCard(
                 }
                 failure != null -> {
                     Text(failure!!, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-                    OutlinedButton(onClick = ::find) { Text("Try again") }
+                    OutlinedButton(onClick = onFind) { Text("Try again") }
                 }
-                !upToDate && savedDay == null -> Text(
+                hospitals == null -> Text(
                     if (canUpdate) "Hospitals will appear once the route is worked out." else "Not looked up yet for this day.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 else -> {
-                    val list = savedDay!!.hospitals
-                    if (!upToDate) {
+                    val list = hospitals
+                    if (routeChanged) {
                         Text(
                             "This day's route changed since this list was made.",
                             style = MaterialTheme.typography.bodySmall,
@@ -171,20 +206,20 @@ fun HospitalsCard(
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        OutlinedButton(onClick = { EmergencyActions.searchMaps(context, "hospitals near ${day.from.name}") }) {
+                        OutlinedButton(onClick = onSearchMaps) {
                             Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Search hospitals on Google Maps")
                         }
                     } else {
-                        list.forEach { HospitalRow(it, dayLabel) }
+                        list.forEach { HospitalRow(it, "About ${it.kmFromStart.roundToInt()} km into $dayLabel") }
                     }
                 }
             }
 
             EmergencyNumbers()
-            if (days.size > 1) {
-                TextButton(onClick = { showAllDays = true }) { Text("See hospitals for all days") }
+            if (multiDay) {
+                TextButton(onClick = onShowAllDays) { Text("See hospitals for all days") }
             }
             Text(
                 "Hospital data © OpenStreetMap contributors. It can be out of date: call ahead when you can.",
@@ -194,13 +229,10 @@ fun HospitalsCard(
         }
     }
 
-    if (showAllDays) {
-        AllDaysHospitalsDialog(days = days, saved = saved.orEmpty(), onDismiss = { showAllDays = false })
-    }
 }
 
 @Composable
-fun HospitalRow(hospital: Hospital, dayLabel: String) {
+fun HospitalRow(hospital: Hospital, distanceLine: String) {
     val context = LocalContext.current
     Column(
         modifier = Modifier
@@ -223,28 +255,39 @@ fun HospitalRow(hospital: Hospital, dayLabel: String) {
             }
         }
         Text(
-            "About ${hospital.kmFromStart.roundToInt()} km into $dayLabel",
+            distanceLine,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         if (hospital.address.isNotBlank()) Text(hospital.address, style = MaterialTheme.typography.bodySmall)
         if (hospital.phone.isNotBlank()) Text("Phone: ${hospital.phone}", style = MaterialTheme.typography.bodySmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val compact = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             if (hospital.phone.isNotBlank()) {
-                FilledTonalButton(onClick = { EmergencyActions.dial(context, hospital.phone) }) {
+                FilledTonalButton(
+                    onClick = { EmergencyActions.dial(context, hospital.phone) },
+                    contentPadding = compact,
+                    modifier = Modifier.weight(1f)
+                ) {
                     Icon(Icons.Filled.Call, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Call")
+                    Text("Call", maxLines = 1)
                 }
             } else {
-                OutlinedButton(onClick = { EmergencyActions.searchMaps(context, "${hospital.name} ${hospital.address}".trim()) }) {
-                    Text("Find phone")
+                OutlinedButton(
+                    onClick = { EmergencyActions.searchMaps(context, "${hospital.name} ${hospital.address}".trim()) },
+                    contentPadding = compact,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Find phone", maxLines = 1)
                 }
             }
-            OutlinedButton(onClick = { EmergencyActions.directions(context, hospital.lat, hospital.lng) }) {
-                Icon(Icons.Filled.Directions, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("Open in Google Maps")
+            OutlinedButton(
+                onClick = { EmergencyActions.directions(context, hospital.lat, hospital.lng) },
+                contentPadding = compact,
+                modifier = Modifier.weight(1.7f)
+            ) {
+                Text("Open in Google Maps", maxLines = 1)
             }
         }
     }
@@ -282,7 +325,7 @@ fun AllDaysHospitalsDialog(days: List<RouteDay>, saved: Map<Int, DayHospitals>, 
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         list.isEmpty() -> Text("None listed within 4 km.", style = MaterialTheme.typography.bodySmall)
-                        else -> list.forEach { HospitalRow(it, label) }
+                        else -> list.forEach { HospitalRow(it, "About ${it.kmFromStart.roundToInt()} km into $label") }
                     }
                 }
             }

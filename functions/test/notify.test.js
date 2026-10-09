@@ -10,6 +10,15 @@ test("chat message shows who wrote what, under the trip name", () => {
   assert.equal(m.body, "Ravi: Leaving at 6?");
 });
 
+test("an SOS goes out as its own urgent type with the full message", () => {
+  const m = notify.chatMessage("Coorg weekend", "Ravi", "SOS: Accident. Ravi needs help. Location: Near NH 275, Srirangapatna.", "sos");
+  assert.equal(m.type, "sos");
+  assert.equal(m.title, "SOS · Coorg weekend");
+  assert.match(m.body, /^SOS: Accident\. Ravi needs help/);
+  assert.equal(notify.chatMessage("T", "Ravi", "", "sos").body, "Ravi needs help.");
+  assert.equal(notify.chatMessage("T", "Ravi", "hi", undefined).type, "chat");
+});
+
 test("long or messy text is squashed and cut", () => {
   const m = notify.chatMessage("T", "A", "x".repeat(500) + "\n\n  y");
   assert.ok(m.body.length <= 180);

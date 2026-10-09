@@ -12,8 +12,16 @@ function tripTitle(tripName) {
   return truncate(tripName || "Your trip", 60);
 }
 
-/** A new Group chat message. */
-function chatMessage(tripName, authorName, text) {
+/** A new Group chat message. An SOS ([kind] "sos") is sent as its own type, which phones show
+ *  on a separate, loud channel, even when the chat is open. */
+function chatMessage(tripName, authorName, text, kind) {
+  if (kind === "sos") {
+    return {
+      type: "sos",
+      title: truncate(`SOS · ${tripName || "Your trip"}`, 60),
+      body: truncate(text || `${authorName || "Someone"} needs help.`),
+    };
+  }
   return {
     type: "chat",
     title: tripTitle(tripName),

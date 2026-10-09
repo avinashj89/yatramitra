@@ -81,6 +81,12 @@ describe("parsing Firestore documents", () => {
     expect(e.customSplitAmounts).toEqual({ a: 5 });
     expect(e.splitAmongMemberIds).toEqual(["a"]);
     expect(parseChat("T", "c", { text: "hi" }).authorName).toBe("Someone");
+    expect(parseChat("T", "c", { text: "hi" }).sos).toBeNull();
+    expect(parseChat("T", "c", { kind: "sos", sosType: "ACCIDENT", lat: 12.5, lng: 77.5, locationName: "Near X" }).sos).toEqual({
+      type: "ACCIDENT", lat: 12.5, lng: 77.5, locationName: "Near X",
+    });
+    expect(parseChat("T", "c", { kind: "sos", sosType: "ALIENS" }).sos).toBeNull();
+    expect(parseChat("T", "c", { kind: "sos", sosType: "FUEL", lat: "x" }).sos?.lat).toBeNull();
   });
 
   it("accepts millisecond numbers and Firestore timestamps", () => {

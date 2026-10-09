@@ -52,6 +52,7 @@ fun ChatScreen(
     var routeSuggestions by remember { mutableStateOf<List<RouteSuggestion>>(emptyList()) }
     var itinerarySuggestions by remember { mutableStateOf<List<ItinerarySuggestion>>(emptyList()) }
     var draft by remember { mutableStateOf("") }
+    var showSos by remember { mutableStateOf(false) }
 
     LaunchedEffect(session.tripCode) {
         launch { TripRepository.observeChat(session.tripCode).collect { chat = it } }
@@ -110,10 +111,10 @@ fun ChatScreen(
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 8.dp)
+            modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 16.dp, bottom = 8.dp)
         ) {
             Icon(Icons.Filled.Forum, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text("Group chat", style = MaterialTheme.typography.titleLarge)
                 Text(
                     "${members.size} on this trip · everyone gets a notification",
@@ -121,6 +122,8 @@ fun ChatScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            // Always available, even on a completed trip: an emergency doesn't check trip status.
+            SosButton(onClick = { showSos = true })
         }
         HorizontalDivider()
 
@@ -141,11 +144,20 @@ fun ChatScreen(
                 }
             }
             itemsIndexed(messages, key = { _, m -> m.id }) { index, message ->
-                ChatBubble(
-                    message = message,
-                    isMine = message.authorMemberId == session.memberId,
-                    showAuthor = GroupChat.showsAuthor(messages.getOrNull(index - 1), message)
-                )
+                val isMine = message.authorMemberId == session.memberId
+                if (message.sos != null) {
+                    SosBubble(
+                        message = message,
+                        isMine = isMine,
+                        authorPhone = members.find { it.id == message.authorMemberId }?.phone
+                    )
+                } else {
+                    ChatBubble(
+                        message = message,
+                        isMine = isMine,
+                        showAuthor = GroupChat.showsAuthor(messages.getOrNull(index - 1), message)
+                    )
+                }
             }
         }
 
@@ -180,6 +192,10 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    if (showSos) {
+        SosSheet(session = session, myName = myName, onDismiss = { showSos = false })
     }
 }
 

@@ -10,6 +10,7 @@ import com.avinash.yatramitra.model.Member
 import com.avinash.yatramitra.model.MemberRole
 import com.avinash.yatramitra.model.RouteDay
 import com.avinash.yatramitra.model.RoutePlan
+import com.avinash.yatramitra.model.SosAlert
 import com.avinash.yatramitra.model.RouteSuggestion
 import com.avinash.yatramitra.model.StopSource
 import com.avinash.yatramitra.model.SuggestionStatus
@@ -555,17 +556,31 @@ object TripRepository {
     suspend fun sendChatMessage(code: String, authorMemberId: String, authorName: String, authorUid: String?, text: String) {
         db.collection("trips").document(code.uppercase())
             .collection("chat").document()
-            .set(
-                mapOf(
-                    "authorMemberId" to authorMemberId,
-                    "authorName" to authorName,
-                    "authorUid" to authorUid,
-                    "text" to text,
-                    "createdAt" to System.currentTimeMillis()
-                )
-            )
+            .set(chatFields(authorMemberId, authorName, authorUid, text, null))
             .await()
     }
+
+    /**
+     * Posts an SOS without waiting for the server: Firestore keeps it on the phone and sends it the
+     * moment there's signal, and it shows in this phone's chat straight away. Waiting would leave
+     * an emergency message stuck on "sending" exactly where coverage is worst.
+     */
+    fun postSos(code: String, authorMemberId: String, authorName: String, authorUid: String?, alert: SosAlert) {
+        val text = SosRules.messageText(alert.type, authorName, alert.locationName.takeIf { alert.lat != null })
+        db.collection("trips").document(code.uppercase())
+            .collection("chat").document()
+            .set(chatFields(authorMemberId, authorName, authorUid, text, alert))
+            .addOnFailureListener { Log.w(TAG, "SOS for $code failed", it) }
+    }
+
+    private fun chatFields(authorMemberId: String, authorName: String, authorUid: String?, text: String, sos: SosAlert?): Map<String, Any?> =
+        mapOf(
+            "authorMemberId" to authorMemberId,
+            "authorName" to authorName,
+            "authorUid" to authorUid,
+            "text" to text,
+            "createdAt" to System.currentTimeMillis()
+        ) + (sos?.let(SosRules::toFields) ?: emptyMap())
 
     fun observeChat(code: String): Flow<List<ChatMessage>> = callbackFlow {
         val reg = db.collection("trips").document(code.uppercase())
@@ -583,7 +598,8 @@ object TripRepository {
                         authorMemberId = doc.getString("authorMemberId").orEmpty(),
                         authorName = doc.getString("authorName").orEmpty(),
                         text = doc.getString("text").orEmpty(),
-                        createdAtMillis = doc.getLong("createdAt") ?: 0L
+                        createdAtMillis = doc.getLong("createdAt") ?: 0L,
+                        sos = doc.data?.let(SosRules::fromFields)
                     )
                 })
             }

@@ -82,7 +82,7 @@ exports.notifyChatMessage = onDocumentCreatedWithAuthContext("trips/{code}/chat/
   if (name === null) return;
   // The app writes authorUid; event.authId (the signed-in writer) is only a fallback.
   const actor = data.authorUid || event.authId || null;
-  const message = notify.chatMessage(name, data.authorName, data.text);
+  const message = notify.chatMessage(name, data.authorName, data.text, data.kind);
   await pushTo(notify.recipients(await memberUids(code), actor), code, message);
 });
 

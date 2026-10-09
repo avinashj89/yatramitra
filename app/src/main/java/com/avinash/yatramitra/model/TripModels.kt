@@ -211,7 +211,20 @@ data class ChatMessage(
     val authorMemberId: String = "",
     val authorName: String = "",
     val text: String = "",
-    val createdAtMillis: Long = 0L
+    val createdAtMillis: Long = 0L,
+    /** Set when this is an SOS, shown highlighted in the chat. */
+    val sos: SosAlert? = null
+)
+
+/** What kind of help an SOS asks for. */
+enum class SosType { ACCIDENT, MEDICAL, BREAKDOWN, POLICE, FUEL, ATM }
+
+/** An SOS: the kind of help, and where the sender was (when their location could be read). */
+data class SosAlert(
+    val type: SosType,
+    val lat: Double? = null,
+    val lng: Double? = null,
+    val locationName: String = ""
 )
 
 enum class SuggestionStatus { PENDING, ACCEPTED, DISMISSED }

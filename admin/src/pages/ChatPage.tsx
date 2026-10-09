@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router";
-import { Box, Card, IconButton, InputAdornment, Link, MenuItem, TextField, Tooltip, Typography } from "@mui/material";
+import { Card, IconButton, InputAdornment, Link, MenuItem, TextField, Tooltip, Typography } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import DeleteIcon from "@mui/icons-material/DeleteOutline";
 import { ConfirmDialog, EmptyState, ErrorBanner, PageHeader } from "../components/ui";
+import { ChatMessageBox } from "../components/ChatMessageBox";
 import { useActions, useAdminData } from "../data/DataContext";
 import { formatDateTime, fromNow } from "../lib/format";
 import type { ChatMessage } from "../types";
@@ -64,28 +65,26 @@ export function ChatPage() {
             <EmptyState title={chat.length === 0 ? "No messages yet" : "Nothing matches"} />
           ) : (
             shown.map((m) => (
-              <Box key={`${m.tripCode}-${m.id}`} className="flex items-start gap-3 rounded-xl px-4 py-3" sx={{ bgcolor: "action.hover" }}>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-baseline gap-x-2">
-                    <Typography variant="subtitle2">{m.authorName}</Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      in{" "}
-                      <Link component={RouterLink} to={`/trips/${m.tripCode}`} underline="hover">
-                        {names.get(m.tripCode) ?? m.tripCode}
-                      </Link>{" "}
-                      · <span title={formatDateTime(m.createdAt)}>{fromNow(m.createdAt)}</span>
-                    </Typography>
-                  </div>
-                  <Typography variant="body2" className="mt-0.5 whitespace-pre-wrap break-words">
-                    {m.text}
-                  </Typography>
-                </div>
-                <Tooltip title="Remove message">
-                  <IconButton size="small" aria-label="Remove message" onClick={() => setPending(m)}>
-                    <DeleteIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-              </Box>
+              <ChatMessageBox
+                key={`${m.tripCode}-${m.id}`}
+                message={m}
+                meta={
+                  <>
+                    in{" "}
+                    <Link component={RouterLink} to={`/trips/${m.tripCode}`} underline="hover" sx={{ color: "inherit", fontWeight: 600 }}>
+                      {names.get(m.tripCode) ?? m.tripCode}
+                    </Link>{" "}
+                    · <span title={formatDateTime(m.createdAt)}>{fromNow(m.createdAt)}</span>
+                  </>
+                }
+                action={
+                  <Tooltip title="Remove message">
+                    <IconButton size="small" aria-label="Remove message" onClick={() => setPending(m)} sx={{ color: m.sos ? "#fff" : undefined }}>
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                }
+              />
             ))
           )}
         </div>

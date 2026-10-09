@@ -31,15 +31,16 @@ object CurrentLocation {
     private fun hasPrecise(context: Context): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
-    /** A fresh fix (up to 15 seconds), else the phone's last known one, with a readable name. */
+    /** A fresh fix (waiting up to [timeoutMillis]), else the phone's last known one, with a
+     *  readable name. */
     @SuppressLint("MissingPermission") // checked by hasPermission() first
-    suspend fun asPlace(context: Context): Place {
+    suspend fun asPlace(context: Context, timeoutMillis: Long = 15_000): Place {
         if (!hasPermission(context)) throw Unavailable("Allow location access to use your current location.")
         val client = LocationServices.getFusedLocationProviderClient(context)
         val priority = if (hasPrecise(context)) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY
         val tokenSource = CancellationTokenSource()
         val location = try {
-            withTimeoutOrNull(15_000) { client.getCurrentLocation(priority, tokenSource.token).await() }
+            withTimeoutOrNull(timeoutMillis) { client.getCurrentLocation(priority, tokenSource.token).await() }
                 ?: client.lastLocation.await()
         } catch (e: SecurityException) {
             null

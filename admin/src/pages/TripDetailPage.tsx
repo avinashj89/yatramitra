@@ -26,6 +26,7 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import DeleteIcon from "@mui/icons-material/DeleteOutline";
 import LoopIcon from "@mui/icons-material/Loop";
 import { ConfirmDialog, CopyButton, EmptyState, ErrorBanner, PageHeader, SectionCard, TripStatusChip } from "../components/ui";
+import { ChatMessageBox } from "../components/ChatMessageBox";
 import { useActions, useAdminData, useTripDetail } from "../data/DataContext";
 import { computeBalances, computeSettlements } from "../lib/balances";
 import { formatDate, formatDateTime, formatINR } from "../lib/format";
@@ -343,25 +344,23 @@ function Chat({ messages, ready, onDelete }: { messages: ChatMessage[]; ready: b
       </Alert>
       <div className="flex max-h-[600px] flex-col gap-2 overflow-y-auto pr-1">
         {messages.map((m) => (
-          <Box key={`${m.source}-${m.id}`} className="flex items-start gap-3 rounded-xl px-4 py-3" sx={{ bgcolor: "action.hover" }}>
-            <div className="min-w-0 flex-1">
-              <Typography variant="subtitle2" component="span">
-                {m.authorName}
-              </Typography>
-              <Typography variant="caption" color="text.secondary" className="ml-2">
+          <ChatMessageBox
+            key={`${m.source}-${m.id}`}
+            message={m}
+            meta={
+              <>
                 {formatDateTime(m.createdAt)}
-              </Typography>
-              {m.source !== "chat" && <Chip size="small" label="Older suggestion" variant="outlined" className="ml-2" />}
-              <Typography variant="body2" className="mt-0.5 whitespace-pre-wrap break-words">
-                {m.text}
-              </Typography>
-            </div>
-            <Tooltip title="Remove message">
-              <IconButton size="small" aria-label="Remove message" onClick={() => setPending(m)}>
-                <DeleteIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          </Box>
+                {m.source !== "chat" && <Chip size="small" label="Older suggestion" variant="outlined" className="ml-2" />}
+              </>
+            }
+            action={
+              <Tooltip title="Remove message">
+                <IconButton size="small" aria-label="Remove message" onClick={() => setPending(m)} sx={{ color: m.sos ? "#fff" : undefined }}>
+                  <DeleteIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            }
+          />
         ))}
       </div>
       <ConfirmDialog

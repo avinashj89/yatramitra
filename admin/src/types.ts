@@ -66,6 +66,17 @@ export interface ChatMessage {
   createdAt: number;
   /** "chat" for Group chat; the older suggestion collections keep their own name. */
   source: "chat" | "routeSuggestions" | "itinerarySuggestions";
+  /** Set when the message is an SOS from the app. */
+  sos: SosAlert | null;
+}
+
+export type SosType = "ACCIDENT" | "MEDICAL" | "BREAKDOWN" | "POLICE" | "FUEL" | "ATM";
+
+export interface SosAlert {
+  type: SosType;
+  lat: number | null;
+  lng: number | null;
+  locationName: string;
 }
 
 export interface ItineraryStop {
